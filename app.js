@@ -918,7 +918,7 @@ $('#btn-olvide').addEventListener('click', async () => {
   const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
   if (error) {
     const m = /rate limit|seconds/i.test(error.message)
-      ? 'Se enviaron demasiados correos. Esperá unos minutos y probá de nuevo.'
+      ? 'Por ahora no se pueden enviar más correos: el plan gratuito permite 2 por hora para todo el sistema. Probá en una hora o pedile al responsable del laboratorio una contraseña provisoria.'
       : traducirError(error).message;
     return mostrarError($('#l-error'), m);
   }
