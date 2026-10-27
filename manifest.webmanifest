@@ -1,0 +1,22 @@
+{
+  "name": "Control de Insumos",
+  "short_name": "Insumos",
+  "description": "Control y baja de insumos consumibles para prácticas académicas.",
+  "lang": "es",
+  "id": "./",
+  "start_url": "./#panel",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8fafc",
+  "theme_color": "#00a9e0",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Registrar consumo", "short_name": "Consumo", "url": "./#consumo", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Insumos", "url": "./#insumos", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
