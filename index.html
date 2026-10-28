@@ -32,13 +32,20 @@
       .etiqueta { break-inside: avoid; border: 1px dashed #94a3b8; border-radius: 3mm; padding: 4mm; text-align: center; }
       @page { margin: 10mm; }
     }
+    /* Impresión del reporte */
+    @media print {
+      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      #toast, #tooltip-grafico { display: none !important; }
+      .tarjeta-reporte { break-inside: avoid; }
+      main { padding-top: 0 !important; }
+    }
     input[type=number]::-webkit-inner-spin-button { opacity: .4; }
   </style>
 </head>
 <body class="overflow-x-hidden bg-slate-50 antialiased">
 
   <!-- ============ ENCABEZADO ============ -->
-  <header class="sticky top-0 z-20 bg-marca-500 shadow-sm">
+  <header class="sticky top-0 z-20 bg-marca-500 shadow-sm print:hidden">
     <div class="mx-auto flex max-w-6xl items-center gap-4 px-4 py-3">
       <div class="flex min-w-0 items-center gap-2">
         <div class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-marca-500">
@@ -51,11 +58,12 @@
       </div>
 
       <nav class="hidden gap-0.5 md:flex lg:ml-4 lg:gap-1">
-        <a href="#panel"   data-nav="panel"   class="nav-link whitespace-nowrap rounded px-3 py-1.5 text-sm font-medium text-white hover:bg-white/15">Panel</a>
-        <a href="#consumo" data-nav="consumo" class="nav-link whitespace-nowrap rounded px-3 py-1.5 text-sm font-medium text-white hover:bg-white/15">Consumo</a>
-        <a href="#insumos" data-nav="insumos" class="nav-link whitespace-nowrap rounded px-3 py-1.5 text-sm font-medium text-white hover:bg-white/15">Insumos</a>
-        <a href="#equipos" data-nav="equipos" class="nav-link whitespace-nowrap rounded px-3 py-1.5 text-sm font-medium text-white hover:bg-white/15">Equipos</a>
-        <a href="#historial" data-nav="historial" class="nav-link whitespace-nowrap rounded px-3 py-1.5 text-sm font-medium text-white hover:bg-white/15">Historial</a>
+        <a href="#panel"   data-nav="panel"   class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Panel</a>
+        <a href="#consumo" data-nav="consumo" class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Consumo</a>
+        <a href="#insumos" data-nav="insumos" class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Insumos</a>
+        <a href="#equipos" data-nav="equipos" class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Equipos</a>
+        <a href="#historial" data-nav="historial" class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Historial</a>
+        <a href="#reportes" data-nav="reportes" class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Reportes</a>
       </nav>
 
       <a id="estado-conexion" href="#historial" title="Usuarios conectados" class="ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/15 px-2.5 py-1 text-xs text-white">
@@ -74,7 +82,7 @@
   <main class="mx-auto max-w-6xl px-4 pb-28 pt-5 md:pb-10">
 
     <!-- Aviso de instalación: solo en celular, fuera de la app instalada -->
-    <div id="aviso-instalar" class="mb-4 hidden items-start gap-3 rounded-xl border border-marca-200 bg-marca-50 p-3 text-sm md:hidden">
+    <div id="aviso-instalar" class="mb-4 hidden print:!hidden items-start gap-3 rounded-xl border border-marca-200 bg-marca-50 p-3 text-sm md:hidden">
       <img src="icons/icon-192.png" alt="" class="h-10 w-10 shrink-0 rounded-lg" />
       <div class="min-w-0 flex-1">
         <p class="font-semibold text-marca-900">Instalá la app en tu celular</p>
@@ -314,29 +322,188 @@
         </div>
       </div>
     </section>
+
+    <!-- ============ VISTA: REPORTES ============ -->
+    <section data-vista="reportes" class="hidden">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div class="min-w-0">
+          <h2 class="text-lg font-semibold text-titulo">Reportes</h2>
+          <p id="r-subtitulo" class="text-sm text-slate-500">Consumos, costos y préstamos del período.</p>
+        </div>
+        <div class="flex gap-2 print:hidden">
+          <button id="btn-imprimir-reporte" type="button" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 9V3h10v6M7 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-2M7 14h10v7H7z"/></svg>
+            <span>Imprimir<span class="hidden sm:inline"> / PDF</span></span>
+          </button>
+          <button id="btn-excel" type="button" class="inline-flex items-center gap-1.5 rounded-lg bg-marca-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-marca-600 disabled:opacity-60">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
+            Excel
+          </button>
+        </div>
+      </div>
+
+      <!-- Filtros -->
+      <div class="mb-5 grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-3 print:hidden sm:flex sm:flex-wrap sm:items-end">
+        <label class="col-span-2 block text-xs font-medium text-slate-500 sm:col-span-1">Período
+          <select id="r-periodo" class="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-marca-500 focus:outline-none sm:w-44">
+            <option value="7">Últimos 7 días</option>
+            <option value="30">Últimos 30 días</option>
+            <option value="mes">Este mes</option>
+            <option value="mes-ant">Mes anterior</option>
+            <option value="90">Últimos 3 meses</option>
+            <option value="anio">Este año</option>
+            <option value="custom">Personalizado</option>
+          </select>
+        </label>
+        <label class="block text-xs font-medium text-slate-500">Desde
+          <input id="r-desde" type="date" class="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-marca-500 focus:outline-none sm:w-40" />
+        </label>
+        <label class="block text-xs font-medium text-slate-500">Hasta
+          <input id="r-hasta" type="date" class="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-marca-500 focus:outline-none sm:w-40" />
+        </label>
+        <label class="col-span-2 block text-xs font-medium text-slate-500 sm:col-span-1">Categoría de insumo
+          <select id="r-categoria" class="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-marca-500 focus:outline-none sm:w-44">
+            <option value="">Todas</option>
+          </select>
+        </label>
+        <div class="col-span-2 sm:col-span-1 sm:ml-auto">
+          <p class="text-xs font-medium text-slate-500">Medir por</p>
+          <div id="r-medida" role="group" aria-label="Medir por" class="mt-1 inline-flex w-full rounded-lg border border-slate-300 p-0.5 sm:w-auto">
+            <button type="button" data-medida="costo" class="flex-1 whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium text-slate-600 aria-pressed:bg-marca-500 aria-pressed:text-white">Costo ($)</button>
+            <button type="button" data-medida="retiros" class="flex-1 whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium text-slate-600 aria-pressed:bg-marca-500 aria-pressed:text-white">Retiros</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="r-contenido" class="space-y-5 transition-opacity">
+        <!-- Indicadores -->
+        <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white p-4">
+            <p class="text-xs font-medium text-slate-500">Costo de consumos</p>
+            <p id="rk-costo" class="mt-1 truncate text-2xl font-semibold">–</p>
+            <p id="rk-costo-nota" class="mt-0.5 text-[11px] text-slate-500"></p>
+          </div>
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white p-4">
+            <p class="text-xs font-medium text-slate-500">Retiros registrados</p>
+            <p id="rk-retiros" class="mt-1 text-2xl font-semibold">–</p>
+            <p id="rk-retiros-nota" class="mt-0.5 text-[11px] text-slate-500"></p>
+          </div>
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white p-4">
+            <p class="text-xs font-medium text-slate-500">Insumos usados</p>
+            <p id="rk-insumos" class="mt-1 text-2xl font-semibold">–</p>
+            <p id="rk-insumos-nota" class="mt-0.5 text-[11px] text-slate-500"></p>
+          </div>
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white p-4">
+            <p class="text-xs font-medium text-slate-500">Préstamos de equipos</p>
+            <p id="rk-prestamos" class="mt-1 text-2xl font-semibold">–</p>
+            <p id="rk-prestamos-nota" class="mt-0.5 text-[11px] text-slate-500"></p>
+          </div>
+        </div>
+
+        <!-- Consumo en el tiempo -->
+        <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+          <div class="flex flex-wrap items-baseline gap-x-2 border-b border-slate-100 px-4 py-3">
+            <h3 id="r-tiempo-titulo" class="text-sm font-semibold">Consumo en el tiempo</h3>
+            <span id="r-tiempo-sub" class="text-xs text-slate-500"></span>
+          </div>
+          <div class="px-2 pb-2 pt-3 sm:px-4">
+            <div id="r-tiempo" class="min-h-[220px]"></div>
+            <details class="mt-1 px-2 print:hidden">
+              <summary class="cursor-pointer text-xs font-medium text-marca-700">Ver datos</summary>
+              <div class="mt-2 max-h-64 overflow-auto"><table id="r-tiempo-tabla" class="w-full text-xs"></table></div>
+            </details>
+          </div>
+        </div>
+
+        <div class="grid gap-5 lg:grid-cols-2">
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+            <div class="border-b border-slate-100 px-4 py-3"><h3 class="text-sm font-semibold">Insumos más consumidos</h3></div>
+            <ul id="r-top-insumos" class="px-4 py-2"></ul>
+          </div>
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+            <div class="border-b border-slate-100 px-4 py-3"><h3 class="text-sm font-semibold">Por práctica o motivo</h3></div>
+            <ul id="r-practicas" class="px-4 py-2"></ul>
+          </div>
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+            <div class="border-b border-slate-100 px-4 py-3"><h3 class="text-sm font-semibold">Por categoría</h3></div>
+            <ul id="r-categorias" class="px-4 py-2"></ul>
+          </div>
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+            <div class="border-b border-slate-100 px-4 py-3"><h3 class="text-sm font-semibold">Quién retira</h3></div>
+            <ul id="r-responsables" class="px-4 py-2"></ul>
+          </div>
+        </div>
+
+        <!-- Proyección de reposición -->
+        <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+          <div class="border-b border-slate-100 px-4 py-3">
+            <h3 class="text-sm font-semibold">Proyección de reposición</h3>
+            <p class="text-xs text-slate-500">Según el ritmo de consumo del período: cuántos días alcanza el stock y cuánto comprar para cubrir 30 días más el mínimo.</p>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 text-left text-xs text-slate-500">
+                <tr>
+                  <th class="px-3 py-2 font-medium sm:px-4">Insumo</th>
+                  <th class="hidden px-3 py-2 text-right font-medium sm:table-cell">Stock</th>
+                  <th class="hidden px-3 py-2 text-right font-medium sm:table-cell">Consumo período</th>
+                  <th class="hidden px-3 py-2 text-right font-medium md:table-cell">Por semana</th>
+                  <th class="px-2 py-2 font-medium sm:px-3">Alcanza</th>
+                  <th class="px-3 py-2 text-right font-medium sm:px-4">Comprar</th>
+                </tr>
+              </thead>
+              <tbody id="r-proyeccion" class="divide-y divide-slate-100"></tbody>
+              <tfoot id="r-proyeccion-pie" class="border-t border-slate-200 bg-slate-50 text-sm"></tfoot>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid gap-5 lg:grid-cols-2">
+          <!-- Préstamos -->
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+            <div class="border-b border-slate-100 px-4 py-3"><h3 class="text-sm font-semibold">Préstamos de equipos</h3></div>
+            <dl id="r-prestamos-datos" class="grid grid-cols-3 gap-px border-b border-slate-100 bg-slate-100"></dl>
+            <p class="px-4 pt-3 text-xs font-medium text-slate-500">Equipos más prestados</p>
+            <ul id="r-top-equipos" class="px-4 pb-2 pt-1"></ul>
+          </div>
+          <!-- Sin movimiento -->
+          <div class="tarjeta-reporte rounded-xl border border-slate-200 bg-white">
+            <div class="border-b border-slate-100 px-4 py-3">
+              <h3 class="text-sm font-semibold">Sin consumo en el período</h3>
+              <p id="r-sin-consumo-nota" class="text-xs text-slate-500"></p>
+            </div>
+            <ul id="r-sin-consumo" class="divide-y divide-slate-100"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- ============ NAVEGACIÓN MÓVIL ============ -->
-  <nav class="fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] md:hidden">
-    <a href="#panel" data-nav="panel" class="nav-link flex flex-col items-center gap-0.5 py-2 text-xs font-medium text-slate-500">
-      <span class="nav-pill rounded-full px-3 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 13h6V4H4v9zm0 7h6v-5H4v5zm10 0h6v-9h-6v9zm0-16v5h6V4h-6z"/></svg></span>
+  <nav class="fixed inset-x-0 bottom-0 z-20 grid grid-cols-6 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] print:hidden md:hidden">
+    <a href="#panel" data-nav="panel" class="nav-link flex min-w-0 flex-col items-center gap-0.5 py-2 text-[11px] font-medium text-slate-500">
+      <span class="nav-pill rounded-full px-2.5 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 13h6V4H4v9zm0 7h6v-5H4v5zm10 0h6v-9h-6v9zm0-16v5h6V4h-6z"/></svg></span>
       Panel
     </a>
-    <a href="#consumo" data-nav="consumo" class="nav-link flex flex-col items-center gap-0.5 py-2 text-xs font-medium text-slate-500">
-      <span class="nav-pill rounded-full px-3 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4m0 0l6-6m-6 6l6 6"/></svg></span>
+    <a href="#consumo" data-nav="consumo" class="nav-link flex min-w-0 flex-col items-center gap-0.5 py-2 text-[11px] font-medium text-slate-500">
+      <span class="nav-pill rounded-full px-2.5 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4m0 0l6-6m-6 6l6 6"/></svg></span>
       Consumo
     </a>
-    <a href="#insumos" data-nav="insumos" class="nav-link flex flex-col items-center gap-0.5 py-2 text-xs font-medium text-slate-500">
-      <span class="nav-pill rounded-full px-3 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10"/></svg></span>
+    <a href="#insumos" data-nav="insumos" class="nav-link flex min-w-0 flex-col items-center gap-0.5 py-2 text-[11px] font-medium text-slate-500">
+      <span class="nav-pill rounded-full px-2.5 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10"/></svg></span>
       Insumos
     </a>
-    <a href="#equipos" data-nav="equipos" class="nav-link flex flex-col items-center gap-0.5 py-2 text-xs font-medium text-slate-500">
-      <span class="nav-pill rounded-full px-3 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path stroke-linecap="round" d="M8 20h8M12 16v4"/></svg></span>
+    <a href="#equipos" data-nav="equipos" class="nav-link flex min-w-0 flex-col items-center gap-0.5 py-2 text-[11px] font-medium text-slate-500">
+      <span class="nav-pill rounded-full px-2.5 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path stroke-linecap="round" d="M8 20h8M12 16v4"/></svg></span>
       Equipos
     </a>
-    <a href="#historial" data-nav="historial" class="nav-link flex flex-col items-center gap-0.5 py-2 text-xs font-medium text-slate-500">
-      <span class="nav-pill rounded-full px-3 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" d="M12 7v5l3 2"/></svg></span>
+    <a href="#historial" data-nav="historial" class="nav-link flex min-w-0 flex-col items-center gap-0.5 py-2 text-[11px] font-medium text-slate-500">
+      <span class="nav-pill rounded-full px-2.5 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" d="M12 7v5l3 2"/></svg></span>
       Historial
+    </a>
+    <a href="#reportes" data-nav="reportes" class="nav-link flex min-w-0 flex-col items-center gap-0.5 py-2 text-[11px] font-medium text-slate-500">
+      <span class="nav-pill rounded-full px-2.5 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M4 20h16M7 16v-5M12 16V6M17 16v-8"/></svg></span>
+      Reportes
     </a>
   </nav>
 
@@ -739,6 +906,7 @@
     <div id="toast-msg" class="rounded-lg bg-slate-900 px-4 py-2.5 text-sm text-white shadow-lg"></div>
   </div>
 
+  <div id="tooltip-grafico" role="tooltip" class="pointer-events-none fixed left-0 top-0 z-50 hidden max-w-[16rem] rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs leading-snug text-white shadow-lg"></div>
   <script src="app.js"></script>
 </body>
 </html>

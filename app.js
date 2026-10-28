@@ -346,13 +346,14 @@ async function cargarDatos() {
     estado.equipos = equipos;
     await fotos.firmar([...insumos, ...equipos].map((x) => x.foto_path && fotos.mini(x.foto_path))).catch(() => {});
     renderTodo();
+    if (vistaActual() === 'reportes') cargarReporte();
   } catch (err) {
     toast(`No se pudieron cargar los datos. ${err.message}`);
   }
 }
 
 // ---------- Navegación por pestañas (hash) ----------
-const VISTAS = ['panel', 'consumo', 'insumos', 'equipos', 'historial'];
+const VISTAS = ['panel', 'consumo', 'insumos', 'equipos', 'historial', 'reportes'];
 
 let equipoPendiente = null;   // id que llegó por QR, se abre al tener los datos
 
@@ -369,6 +370,7 @@ function mostrarVista() {
     a.dataset.nav === actual ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'),
   );
   window.scrollTo({ top: 0 });
+  if (actual === 'reportes' && sesionActiva && estado.insumos.length) cargarReporte();
 }
 window.addEventListener('hashchange', mostrarVista);
 
@@ -755,9 +757,9 @@ function pintarConexion(ok = conexionOk) {
   const n = estado.conectados.length;
   // En celular: punto + cantidad; en pantallas grandes: "En vivo · N conectados".
   indicador.innerHTML = ok
-    ? `<span class="h-2 w-2 rounded-full bg-emerald-300"></span><span class="hidden sm:inline">En vivo${n ? ` · ${n} conectado${n === 1 ? '' : 's'}` : ''}</span>` +
-      (n ? `<span class="inline-flex items-center gap-0.5 sm:hidden"><svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path stroke-linecap="round" d="M2.5 20a6.5 6.5 0 0113 0M16 4.5a3.5 3.5 0 010 7M18 14a6.5 6.5 0 013.5 6"/></svg>${n}</span>` : '')
-    : '<span class="h-2 w-2 rounded-full bg-amber-700"></span><span class="hidden sm:inline">Reconectando…</span>';
+    ? `<span class="h-2 w-2 rounded-full bg-emerald-300"></span><span class="hidden lg:inline">En vivo${n ? ` · ${n} conectado${n === 1 ? '' : 's'}` : ''}</span>` +
+      (n ? `<span class="inline-flex items-center gap-0.5 lg:hidden"><svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path stroke-linecap="round" d="M2.5 20a6.5 6.5 0 0113 0M16 4.5a3.5 3.5 0 010 7M18 14a6.5 6.5 0 013.5 6"/></svg>${n}</span>` : '')
+    : '<span class="h-2 w-2 rounded-full bg-amber-700"></span><span class="hidden lg:inline">Reconectando…</span>';
   indicador.title = n ? 'Conectados: ' + estado.conectados.map((c) => c.nombre).join(', ') : 'Usuarios conectados';
   indicador.className = `ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs ${
     ok ? 'bg-white/15 text-white' : 'bg-amber-400 text-amber-950'
@@ -1343,6 +1345,563 @@ formCuenta.addEventListener('submit', async (ev) => {
     if (canal) canal.track({ nombre, desde: new Date().toISOString() }).catch(() => {});
   } catch (err) {
     mostrarError(errorEl, err.message);
+  } finally {
+    boton.disabled = false;
+  }
+});
+
+// ---------- Reportes ----------
+// Los datos del período se piden al entrar a la pestaña o al cambiar filtros; los gráficos son SVG/HTML propios.
+const TZ_UY = '-03:00';   // Uruguay no usa horario de verano
+const COLOR_DATO = '#0090c0', COLOR_DATO_FUERTE = '#005a78', COLOR_OTROS = '#cbd5e1';
+const rep = {
+  periodo: leerLocal('rep-periodo') || '30',
+  medida: leerLocal('rep-medida') === 'retiros' ? 'retiros' : 'costo',
+  desde: '', hasta: '', categoria: '',
+  consumos: [], anteriores: [], prestamos: [],
+  pedido: 0, cargadoEn: 0,
+};
+
+const isoDeFecha = (d) => new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+const fechaDeIso = (iso) => { const [a, m, d] = iso.split('-').map(Number); return new Date(a, m - 1, d); };
+const masDias = (iso, n) => { const d = fechaDeIso(iso); d.setDate(d.getDate() + n); return isoDeFecha(d); };
+const diasEntre = (a, b) => Math.round((fechaDeIso(b) - fechaDeIso(a)) / 864e5) + 1;   // ambos incluidos
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const MESES_LARGOS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+const diaCorto = (iso) => `${Number(iso.slice(8))}/${Number(iso.slice(5, 7))}`;
+const fmtEntero = new Intl.NumberFormat('es-UY', { maximumFractionDigits: 0 });
+const fmtPesos = (n) => `$ ${fmtEntero.format(Math.round(n || 0))}`;
+const fmtCompacto = (n) => (n >= 1e6 ? `${fmtNum.format(+(n / 1e6).toFixed(1))} M` : n >= 1e3 ? `${fmtNum.format(+(n / 1e3).toFixed(1))} k` : fmtEntero.format(n));
+const plural = (n, uno, varios) => `${fmtNum.format(n)} ${n === 1 ? uno : varios}`;
+
+function rangoPeriodo(p) {
+  const hoy = hoyISO(), d = fechaDeIso(hoy);
+  switch (p) {
+    case '7': return [masDias(hoy, -6), hoy];
+    case 'mes': return [`${hoy.slice(0, 8)}01`, hoy];
+    case 'mes-ant': return [isoDeFecha(new Date(d.getFullYear(), d.getMonth() - 1, 1)), isoDeFecha(new Date(d.getFullYear(), d.getMonth(), 0))];
+    case '90': return [masDias(hoy, -89), hoy];
+    case 'anio': return [`${hoy.slice(0, 4)}-01-01`, hoy];
+    default: return [masDias(hoy, -29), hoy];
+  }
+}
+
+// Trae todas las filas aunque pasen el límite de 1000 por consulta.
+async function traerTodo(armarConsulta) {
+  const filas = [], paso = 1000;
+  for (let i = 0; ; i += paso) {
+    const { data, error } = await armarConsulta().range(i, i + paso - 1);
+    if (error) throw traducirError(error);
+    filas.push(...data);
+    if (data.length < paso) return filas;
+  }
+}
+const entreFechas = (q, campo, desde, hasta) =>
+  q.gte(campo, `${desde}T00:00:00${TZ_UY}`).lt(campo, `${masDias(hasta, 1)}T00:00:00${TZ_UY}`);
+
+datos.consumosEntre = async (desde, hasta) => (await traerTodo(() =>
+  entreFechas(sb.from('v_consumos').select('*'), 'fecha_hora', desde, hasta).order('fecha_hora').order('id'),
+)).map((c) => ({ ...c, cantidad: aNumero(c.cantidad), precio_unitario: aNumero(c.precio_unitario), costo: aNumero(c.costo) }));
+datos.prestamosEntre = async (desde, hasta) => (await traerTodo(() =>
+  entreFechas(sb.from('v_prestamos').select('*'), 'fecha_retiro', desde, hasta).order('fecha_retiro').order('id'),
+)).map((p) => ({ ...p, dias: aNumero(p.dias) }));
+
+const vistaActual = () => (VISTAS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'panel');
+
+function prepararFiltrosReporte() {
+  $('#r-periodo').value = rep.periodo;
+  if (rep.periodo !== 'custom' || !rep.desde) [rep.desde, rep.hasta] = rangoPeriodo(rep.periodo);
+  $('#r-desde').value = rep.desde;
+  $('#r-hasta').value = rep.hasta;
+  $$('#r-medida [data-medida]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.medida === rep.medida)));
+}
+
+async function cargarReporte() {
+  if (!sesionActiva) return;
+  prepararFiltrosReporte();
+  const { desde, hasta } = rep;
+  if (!desde || !hasta || desde > hasta) return toast('Revisá las fechas: "Desde" tiene que ser anterior a "Hasta".');
+  const largo = diasEntre(desde, hasta);
+  const antDesde = masDias(desde, -largo), antHasta = masDias(desde, -1);
+  const pedido = ++rep.pedido;
+  $('#r-contenido').classList.add('opacity-50');
+  try {
+    const [consumos, anteriores, prestamos] = await Promise.all([
+      datos.consumosEntre(desde, hasta),
+      datos.consumosEntre(antDesde, antHasta),
+      datos.prestamosEntre(desde, hasta),
+    ]);
+    if (pedido !== rep.pedido) return;   // llegó una consulta más nueva
+    Object.assign(rep, { consumos, anteriores, prestamos, cargadoEn: Date.now() });
+    renderReporte();
+  } catch (err) {
+    if (pedido === rep.pedido) toast(/v_consumos|v_prestamos|does not exist|schema cache/i.test(err.message)
+      ? 'Falta preparar la base para reportes (supabase/05-reportes.sql).'
+      : `No se pudo cargar el reporte. ${err.message}`);
+  } finally {
+    if (pedido === rep.pedido) $('#r-contenido').classList.remove('opacity-50');
+  }
+}
+
+// Suma por clave: costo, cantidad de retiros y cantidad retirada.
+function agrupar(filas, clave, extra = () => ({})) {
+  const mapa = new Map();
+  for (const f of filas) {
+    const k = clave(f);
+    if (!mapa.has(k)) mapa.set(k, { clave: k, costo: 0, retiros: 0, cantidad: 0, sinPrecio: 0, ...extra(f) });
+    const g = mapa.get(k);
+    g.retiros += 1;
+    g.cantidad += f.cantidad || 0;
+    if (f.costo == null) g.sinPrecio += 1; else g.costo += f.costo;
+  }
+  return [...mapa.values()];
+}
+const valorDe = (g) => (rep.medida === 'costo' ? g.costo : g.retiros);
+const fmtMedida = (v) => (rep.medida === 'costo' ? fmtPesos(v) : plural(v, 'retiro', 'retiros'));
+
+function variacion(actual, anterior) {
+  if (!anterior) return actual ? 'sin datos del período anterior' : '';
+  const pct = Math.round(((actual - anterior) / anterior) * 100);
+  if (pct === 0) return 'igual que el período anterior';
+  return `${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)} % vs. período anterior`;
+}
+
+function renderReporte() {
+  // Categorías disponibles (se conserva la elegida)
+  const cats = [...new Set(estado.insumos.map((i) => i.categoria))].sort((a, b) => a.localeCompare(b, 'es'));
+  $('#r-categoria').innerHTML = '<option value="">Todas</option>' + cats.map((c) => `<option>${esc(c)}</option>`).join('');
+  if (cats.includes(rep.categoria)) $('#r-categoria').value = rep.categoria; else rep.categoria = '';
+
+  const filtro = (c) => !rep.categoria || c.categoria === rep.categoria;
+  const consumos = rep.consumos.filter(filtro);
+  const anteriores = rep.anteriores.filter(filtro);
+  const dias = diasEntre(rep.desde, rep.hasta);
+  $('#r-subtitulo').textContent = `${fmtDia(rep.desde)} al ${fmtDia(rep.hasta)} · ${plural(dias, 'día', 'días')}${rep.categoria ? ` · ${rep.categoria}` : ''}`;
+
+  // Indicadores
+  const costo = consumos.reduce((s, c) => s + (c.costo || 0), 0);
+  const costoAnt = anteriores.reduce((s, c) => s + (c.costo || 0), 0);
+  const sinPrecio = consumos.filter((c) => c.costo == null).length;
+  $('#rk-costo').textContent = fmtPesos(costo);
+  $('#rk-costo-nota').textContent = [variacion(costo, costoAnt), sinPrecio ? `${plural(sinPrecio, 'retiro', 'retiros')} sin precio` : ''].filter(Boolean).join(' · ');
+  $('#rk-retiros').textContent = fmtEntero.format(consumos.length);
+  $('#rk-retiros-nota').textContent = variacion(consumos.length, anteriores.length);
+  const catalogo = estado.insumos.filter(filtro).length;
+  $('#rk-insumos').textContent = fmtEntero.format(new Set(consumos.map((c) => c.insumo_id)).size);
+  $('#rk-insumos-nota').textContent = `de ${plural(catalogo, 'insumo', 'insumos')} en el catálogo`;
+  const pr = rep.prestamos;
+  const fuera = pr.filter((p) => p.fuera_de_plazo).length, danio = pr.filter((p) => p.condicion_devolucion === 'Con daño').length;
+  $('#rk-prestamos').textContent = fmtEntero.format(pr.length);
+  $('#rk-prestamos-nota').textContent = pr.length ? `${fuera} fuera de plazo · ${danio} con daño` : '';
+
+  renderGraficoTiempo(consumos);
+
+  const vacio = '<li class="py-6 text-center text-sm text-slate-400">Sin consumos en este período.</li>';
+  const porInsumo = agrupar(consumos, (c) => c.insumo_id, (c) => ({ etiqueta: c.insumo, unidad: c.unidad_medida, codigo: c.codigo }));
+  barras($('#r-top-insumos'), porInsumo.map((g) => ({
+    etiqueta: g.etiqueta, valor: valorDe(g),
+    detalle: `${fmtNum.format(g.cantidad)} ${g.unidad} · ${plural(g.retiros, 'retiro', 'retiros')}`,
+    tip: tipGrupo(g, `${fmtNum.format(g.cantidad)} ${g.unidad}`),
+  })), fmtMedida, vacio, 8);
+  barras($('#r-practicas'), agrupar(consumos, (c) => c.practica_motivo.trim()).map((g) => ({
+    etiqueta: g.clave, valor: valorDe(g), detalle: rep.medida === 'costo' ? plural(g.retiros, 'retiro', 'retiros') : fmtPesos(g.costo), tip: tipGrupo(g),
+  })), fmtMedida, vacio, 8);
+  barras($('#r-categorias'), agrupar(consumos, (c) => c.categoria).map((g) => ({
+    etiqueta: g.clave, valor: valorDe(g), detalle: rep.medida === 'costo' ? plural(g.retiros, 'retiro', 'retiros') : fmtPesos(g.costo), tip: tipGrupo(g),
+  })), fmtMedida, vacio, 8);
+  barras($('#r-responsables'), agrupar(consumos, (c) => c.responsable.trim()).map((g) => ({
+    etiqueta: g.clave, valor: valorDe(g), detalle: rep.medida === 'costo' ? plural(g.retiros, 'retiro', 'retiros') : fmtPesos(g.costo), tip: tipGrupo(g),
+  })), fmtMedida, vacio, 8);
+
+  renderProyeccion(consumos, dias, filtro);
+  renderPrestamosReporte();
+  renderSinConsumo(consumos, filtro);
+}
+
+function tipGrupo(g, cantidad = '') {
+  return `<b>${esc(g.etiqueta ?? g.clave)}</b><br>${fmtPesos(g.costo)} · ${plural(g.retiros, 'retiro', 'retiros')}` +
+    (cantidad ? `<br>${esc(cantidad)}` : '') + (g.sinPrecio ? `<br><span class="text-slate-300">${g.sinPrecio} sin precio</span>` : '');
+}
+
+// Barras horizontales (HTML): valor al final de cada barra; el resto se agrupa en "Otros".
+function barras(cont, filas, fmt, vacio, maximo = 8) {
+  const hayDatos = filas.length > 0;
+  filas = filas.filter((f) => f.valor > 0).sort((a, b) => b.valor - a.valor);
+  if (!filas.length) {
+    cont.innerHTML = hayDatos
+      ? '<li class="py-6 text-center text-sm text-slate-400">Estos consumos no tienen precio cargado. Probá con “Retiros”.</li>'
+      : vacio;
+    return;
+  }
+  const visibles = filas.slice(0, maximo);
+  const resto = filas.slice(maximo);
+  if (resto.length) {
+    const total = resto.reduce((s, f) => s + f.valor, 0);
+    visibles.push({ etiqueta: `Otros (${resto.length})`, valor: total, detalle: '', otros: true,
+      tip: `<b>Otros ${resto.length}</b><br>${resto.slice(0, 6).map((f) => esc(f.etiqueta)).join(', ')}${resto.length > 6 ? '…' : ''}` });
+  }
+  const mayor = Math.max(...visibles.map((f) => f.valor)) || 1;
+  cont.innerHTML = visibles.map((f) => `
+    <li class="grid grid-cols-[minmax(0,8.5rem)_minmax(0,1fr)] items-center gap-3 py-1.5 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]" data-tip="${esc(f.tip || '')}">
+      <div class="min-w-0">
+        <p class="truncate text-sm text-slate-800" title="${esc(f.etiqueta)}">${esc(f.etiqueta)}</p>
+        ${f.detalle ? `<p class="truncate text-[11px] text-slate-500">${esc(f.detalle)}</p>` : ''}
+      </div>
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="block h-3 shrink-0 rounded-r" style="width:calc((100% - 5.75rem) * ${(f.valor / mayor).toFixed(4)});min-width:${f.valor ? 2 : 0}px;background:${f.otros ? COLOR_OTROS : COLOR_DATO}"></span>
+        <span class="whitespace-nowrap text-xs tabular-nums text-slate-700">${fmt(f.valor)}</span>
+      </div>
+    </li>`).join('');
+}
+
+// Escala con números redondos para el eje.
+function escalaRedonda(maximo, divisiones = 4, entero = false) {
+  if (!(maximo > 0)) return [0, entero ? 1 : 1];
+  const bruto = maximo / divisiones;
+  const mag = 10 ** Math.floor(Math.log10(bruto));
+  let paso = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((p) => p >= bruto);
+  if (entero) paso = Math.max(1, Math.ceil(paso));
+  const tope = Math.ceil(maximo / paso - 1e-9) * paso;
+  const ticks = [];
+  for (let v = 0; v <= tope + paso / 2; v += paso) ticks.push(+v.toFixed(6));
+  return ticks;
+}
+
+// Agrupa los consumos por día, semana (lunes) o mes según el largo del período, incluyendo los vacíos.
+function cubetasTiempo(consumos) {
+  const dias = diasEntre(rep.desde, rep.hasta);
+  const modo = dias <= 45 ? 'dia' : dias <= 210 ? 'semana' : 'mes';
+  const claveDe = (iso) => {
+    if (modo === 'dia') return iso;
+    if (modo === 'mes') return iso.slice(0, 7);
+    const d = fechaDeIso(iso); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return isoDeFecha(d);
+  };
+  const cubetas = [];
+  const indice = new Map();
+  for (let iso = rep.desde; iso <= rep.hasta; iso = masDias(iso, 1)) {
+    const k = claveDe(iso);
+    if (!indice.has(k)) { indice.set(k, cubetas.length); cubetas.push({ clave: k, desde: iso, hasta: iso, costo: 0, retiros: 0, sinPrecio: 0 }); }
+    cubetas[indice.get(k)].hasta = iso;
+  }
+  for (const c of consumos) {
+    const i = indice.get(claveDe(c.dia));
+    if (i == null) continue;
+    cubetas[i].retiros += 1;
+    if (c.costo == null) cubetas[i].sinPrecio += 1; else cubetas[i].costo += c.costo;
+  }
+  for (const b of cubetas) {
+    const [a, m] = [b.desde.slice(0, 4), Number(b.desde.slice(5, 7))];
+    b.corta = modo === 'mes' ? MESES[m - 1] : diaCorto(b.desde);
+    b.larga = modo === 'dia' ? fechaDeIso(b.desde).toLocaleDateString('es-UY', { weekday: 'long', day: 'numeric', month: 'long' })
+      : modo === 'mes' ? `${MESES_LARGOS[m - 1]} ${a}` : `Semana del ${diaCorto(b.desde)} al ${diaCorto(b.hasta)}`;
+  }
+  return { modo, cubetas };
+}
+
+function renderGraficoTiempo(consumos) {
+  const { modo, cubetas } = cubetasTiempo(consumos);
+  const nombre = rep.medida === 'costo' ? 'Costo de consumos' : 'Retiros';
+  $('#r-tiempo-titulo').textContent = `${nombre} en el tiempo`;
+  $('#r-tiempo-sub').textContent = { dia: 'por día', semana: 'por semana', mes: 'por mes' }[modo];
+  rep.cubetas = cubetas;
+  dibujarColumnas($('#r-tiempo'), cubetas);
+  $('#r-tiempo-tabla').innerHTML = `<thead class="text-left text-slate-500"><tr><th class="py-1 pr-3 font-medium">${{ dia: 'Día', semana: 'Semana', mes: 'Mes' }[modo]}</th><th class="py-1 pr-3 text-right font-medium">Costo</th><th class="py-1 text-right font-medium">Retiros</th></tr></thead><tbody>` +
+    cubetas.map((b) => `<tr class="border-t border-slate-100"><td class="py-1 pr-3">${esc(b.larga)}</td><td class="py-1 pr-3 text-right tabular-nums">${fmtPesos(b.costo)}</td><td class="py-1 text-right tabular-nums">${b.retiros}</td></tr>`).join('') + '</tbody>';
+}
+
+// Columnas verticales en SVG: barras finas, punta redondeada, eje con números redondos y aviso al pasar el dedo/mouse.
+function dibujarColumnas(cont, cubetas) {
+  ocultarTooltip();
+  const ancho = Math.max(280, Math.round(cont.clientWidth || 640));
+  const alto = 220;
+  const valores = cubetas.map((b) => (rep.medida === 'costo' ? b.costo : b.retiros));
+  const ticks = escalaRedonda(Math.max(0, ...valores), 4, rep.medida === 'retiros');
+  const tope = ticks[ticks.length - 1] || 1;
+  const textoEje = (v) => (rep.medida === 'costo' ? `$ ${fmtCompacto(v)}` : fmtEntero.format(v));
+  const mIzq = Math.max(...ticks.map((t) => textoEje(t).length)) * 6.4 + 10;
+  const m = { t: 10, r: 6, b: 24, l: mIzq };
+  const w = ancho - m.l - m.r, h = alto - m.t - m.b;
+  const banda = w / cubetas.length;
+  const grosor = Math.max(1, Math.min(24, banda - 2));
+  const y = (v) => m.t + h - (v / tope) * h;
+  const cadaCuanto = Math.max(1, Math.ceil(cubetas.length / Math.max(1, Math.floor(w / 46))));
+  let svg = `<svg viewBox="0 0 ${ancho} ${alto}" width="100%" height="${alto}" role="img" aria-label="${esc($('#r-tiempo-titulo').textContent)}" class="block select-none overflow-visible" font-family="inherit">`;
+  for (const t of ticks) {
+    svg += `<line x1="${m.l}" x2="${ancho - m.r}" y1="${y(t)}" y2="${y(t)}" stroke="${t ? '#eef2f6' : '#cbd5e1'}" stroke-width="1" shape-rendering="crispEdges"/>`;
+    svg += `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end" font-size="11" fill="#64748b" style="font-variant-numeric:tabular-nums">${esc(textoEje(t))}</text>`;
+  }
+  cubetas.forEach((b, i) => {
+    const v = valores[i];
+    const x = m.l + i * banda + (banda - grosor) / 2;
+    if (v > 0) {
+      const yTop = y(v), y0 = y(0);
+      const r = Math.min(4, grosor / 2, y0 - yTop);
+      svg += `<path data-barra="${i}" d="M${x},${y0}V${yTop + r}Q${x},${yTop} ${x + r},${yTop}H${x + grosor - r}Q${x + grosor},${yTop} ${x + grosor},${yTop + r}V${y0}Z" fill="${COLOR_DATO}"/>`;
+    }
+    if (i % cadaCuanto === 0) svg += `<text x="${m.l + i * banda + banda / 2}" y="${alto - 6}" text-anchor="middle" font-size="11" fill="#64748b">${esc(b.corta)}</text>`;
+    const tip = `<b>${esc(b.larga)}</b><br>${fmtPesos(b.costo)} · ${plural(b.retiros, 'retiro', 'retiros')}${b.sinPrecio ? `<br><span class="text-slate-300">${b.sinPrecio} sin precio</span>` : ''}`;
+    svg += `<rect data-tip="${esc(tip)}" data-i="${i}" x="${m.l + i * banda}" y="${m.t}" width="${banda}" height="${h}" fill="transparent"/>`;
+  });
+  cont.innerHTML = svg + '</svg>';
+}
+
+function renderProyeccion(consumos, dias, filtro) {
+  const usado = new Map();
+  for (const c of consumos) usado.set(c.insumo_id, (usado.get(c.insumo_id) || 0) + (c.cantidad || 0));
+  const filas = estado.insumos.filter(filtro).map((i) => {
+    const cant = usado.get(i.id) || 0;
+    const porDia = cant / dias;
+    const alcanza = porDia > 0 ? i.stock_actual / porDia : null;
+    const comprar = Math.max(0, Math.ceil(porDia * 30 + i.stock_minimo - i.stock_actual - 1e-9));
+    return { i, cant, porDia, alcanza, comprar, costoCompra: i.ultimo_precio != null ? comprar * i.ultimo_precio : null };
+  }).filter((f) => f.cant > 0 || f.i.estado_stock !== 'ok');
+  const orden = (f) => (f.i.stock_actual <= 0 ? -1 : f.alcanza ?? (f.i.estado_stock !== 'ok' ? 1e6 : 1e7));
+  filas.sort((a, b) => orden(a) - orden(b) || a.i.nombre.localeCompare(b.i.nombre, 'es'));
+
+  const insignia = (f) => {
+    if (f.i.stock_actual <= 0) return ['Agotado', 'bg-red-50 text-red-700 ring-red-200'];
+    if (f.alcanza == null) return ['Sin consumo', 'bg-slate-50 text-slate-600 ring-slate-200'];
+    const d = Math.floor(f.alcanza);
+    const texto = d < 1 ? 'Menos de 1 día' : d > 365 ? 'Más de 1 año' : `~${plural(d, 'día', 'días')}`;
+    return [texto, d <= 7 ? 'bg-red-50 text-red-700 ring-red-200' : d <= 30 ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-emerald-50 text-emerald-700 ring-emerald-200'];
+  };
+  $('#r-proyeccion').innerHTML = filas.length ? filas.map((f) => {
+    const [texto, clases] = insignia(f);
+    const u = f.i.unidad_medida;
+    const fecha = f.alcanza != null && f.alcanza <= 365 && f.i.stock_actual > 0 ? fmtDia(masDias(hoyISO(), Math.floor(f.alcanza))) : '';
+    return `<tr>
+      <td class="px-3 py-2 sm:px-4"><p class="font-medium text-slate-800">${esc(f.i.nombre)}</p><p class="text-xs tabular-nums text-slate-600 sm:hidden">Stock: ${fmtNum.format(f.i.stock_actual)} ${esc(u)}</p><p class="font-mono text-[11px] text-slate-500">${esc(f.i.codigo || '')}${f.i.estado_stock !== 'ok' ? `${f.i.codigo ? ' · ' : ''}<span class="font-sans">${f.i.estado_stock === 'agotado' ? 'agotado' : 'bajo mínimo'}</span>` : ''}</p></td>
+      <td class="hidden whitespace-nowrap px-3 py-2 text-right tabular-nums sm:table-cell">${fmtNum.format(f.i.stock_actual)} <span class="text-xs text-slate-500">${esc(u)}</span></td>
+      <td class="hidden whitespace-nowrap px-3 py-2 text-right tabular-nums sm:table-cell">${fmtNum.format(f.cant)}</td>
+      <td class="hidden whitespace-nowrap px-3 py-2 text-right tabular-nums md:table-cell">${fmtNum.format(+(f.porDia * 7).toFixed(1))}</td>
+      <td class="px-2 py-2 sm:px-3"><span class="inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${clases}">${texto}</span>${fecha ? `<p class="mt-0.5 whitespace-nowrap text-[11px] text-slate-500">hasta ${fecha}</p>` : ''}</td>
+      <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums sm:px-4">${f.comprar ? `${fmtNum.format(f.comprar)} <span class="text-xs text-slate-500">${esc(u)}</span>${f.costoCompra != null ? `<p class="text-[11px] text-slate-500">${fmtPesos(f.costoCompra)}</p>` : ''}` : '<span class="text-slate-400">—</span>'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="px-4 py-6 text-center text-sm text-slate-400">Sin consumos ni insumos bajo mínimo en este período.</td></tr>';
+  const conCompra = filas.filter((f) => f.comprar > 0);
+  const total = conCompra.reduce((s, f) => s + (f.costoCompra || 0), 0);
+  const sinPrecio = conCompra.filter((f) => f.costoCompra == null).length;
+  $('#r-proyeccion-pie').innerHTML = conCompra.length
+    ? `<tr><td colspan="6" class="px-4 py-2 text-right text-sm"><span class="text-slate-500">Compra sugerida (${plural(conCompra.length, 'insumo', 'insumos')}):</span> <b class="tabular-nums">${fmtPesos(total)}</b>${sinPrecio ? ` <span class="text-xs text-slate-500">+ ${sinPrecio} sin precio</span>` : ''}</td></tr>`
+    : '';
+}
+
+function renderPrestamosReporte() {
+  const pr = rep.prestamos;
+  const devueltos = pr.filter((p) => p.estado === 'Devuelto');
+  const promedio = devueltos.length ? devueltos.reduce((s, p) => s + (p.dias || 0), 0) / devueltos.length : null;
+  const datosPr = [
+    ['Préstamos', fmtEntero.format(pr.length)],
+    ['Devueltos', fmtEntero.format(devueltos.length)],
+    ['Siguen afuera', fmtEntero.format(pr.length - devueltos.length)],
+    ['Fuera de plazo', fmtEntero.format(pr.filter((p) => p.fuera_de_plazo).length)],
+    ['Con daño', fmtEntero.format(pr.filter((p) => p.condicion_devolucion === 'Con daño').length)],
+    ['Duración media', promedio == null ? '—' : plural(+promedio.toFixed(1), 'día', 'días')],
+  ];
+  $('#r-prestamos-datos').innerHTML = datosPr.map(([t, v]) => `<div class="bg-white px-3 py-2.5"><dt class="text-[11px] text-slate-500">${t}</dt><dd class="text-lg font-semibold tabular-nums text-slate-800">${v}</dd></div>`).join('');
+  const porEquipo = new Map();
+  for (const p of pr) {
+    const g = porEquipo.get(p.equipo_id) || { etiqueta: p.equipo, codigo: p.codigo_serie, valor: 0, dias: 0 };
+    g.valor += 1; g.dias += p.dias || 0;
+    porEquipo.set(p.equipo_id, g);
+  }
+  barras($('#r-top-equipos'), [...porEquipo.values()].map((g) => ({
+    etiqueta: g.etiqueta, valor: g.valor, detalle: `${g.codigo} · ${plural(+(g.dias / g.valor).toFixed(1), 'día', 'días')} prom.`,
+    tip: `<b>${esc(g.etiqueta)}</b><br>${plural(g.valor, 'préstamo', 'préstamos')}`,
+  })), (v) => plural(v, 'préstamo', 'préstamos'), '<li class="py-6 text-center text-sm text-slate-400">Sin préstamos en este período.</li>', 6);
+}
+
+function renderSinConsumo(consumos, filtro) {
+  const usados = new Set(consumos.map((c) => c.insumo_id));
+  const quietos = estado.insumos.filter((i) => filtro(i) && !usados.has(i.id) && i.stock_actual > 0)
+    .sort((a, b) => (b.valor_stock || 0) - (a.valor_stock || 0));
+  const valor = quietos.reduce((s, i) => s + (i.valor_stock || 0), 0);
+  $('#r-sin-consumo-nota').textContent = quietos.length
+    ? `${plural(quietos.length, 'insumo', 'insumos')} con stock que no se usaron · ${fmtPesos(valor)} inmovilizados`
+    : 'Todos los insumos con stock tuvieron consumo.';
+  const max = 8;
+  $('#r-sin-consumo').innerHTML = quietos.slice(0, max).map((i) => `
+    <li class="flex items-center gap-3 px-4 py-2">
+      <div class="min-w-0 flex-1"><p class="truncate text-sm text-slate-800">${esc(i.nombre)}</p><p class="text-[11px] text-slate-500">${fmtNum.format(i.stock_actual)} ${esc(i.unidad_medida)} · ${esc(i.categoria)}</p></div>
+      <span class="whitespace-nowrap text-xs tabular-nums text-slate-700">${i.valor_stock != null ? fmtPesos(i.valor_stock) : 'sin precio'}</span>
+    </li>`).join('') + (quietos.length > max ? `<li class="px-4 py-2 text-xs text-slate-500">y ${quietos.length - max} más (ver en Excel)</li>` : '');
+}
+
+// Aviso flotante para gráficos (mouse y toque)
+const tooltip = $('#tooltip-grafico');
+let tipActivo = null;
+function moverTooltip(ev) {
+  const pad = 12, r = tooltip.getBoundingClientRect();
+  let x = ev.clientX + pad, y = ev.clientY - r.height - pad;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
+  if (y < 8) y = ev.clientY + pad;
+  tooltip.style.transform = `translate(${Math.max(8, x)}px, ${y}px)`;
+}
+function ocultarTooltip() {
+  tooltip.classList.add('hidden');
+  if (tipActivo) { $$('[data-barra]', $('#r-tiempo')).forEach((b) => b.setAttribute('fill', COLOR_DATO)); tipActivo = null; }
+}
+document.addEventListener('pointerover', (ev) => {
+  const el = ev.target.closest?.('[data-vista="reportes"] [data-tip]');
+  if (!el || !el.dataset.tip) return;
+  if (tipActivo !== el) ocultarTooltip();
+  tipActivo = el;
+  tooltip.innerHTML = el.dataset.tip;
+  tooltip.classList.remove('hidden');
+  if (el.dataset.i != null) $(`[data-barra="${el.dataset.i}"]`, $('#r-tiempo'))?.setAttribute('fill', COLOR_DATO_FUERTE);
+  moverTooltip(ev);
+});
+document.addEventListener('pointermove', (ev) => { if (tipActivo) moverTooltip(ev); });
+document.addEventListener('pointerout', (ev) => {
+  // Con el dedo el aviso queda visible hasta tocar en otro lado.
+  if (ev.pointerType !== 'touch' && tipActivo && !tipActivo.contains(ev.relatedTarget)) ocultarTooltip();
+});
+document.addEventListener('pointerdown', (ev) => {
+  if (tipActivo && !ev.target.closest?.('[data-tip]')) ocultarTooltip();
+});
+document.addEventListener('scroll', ocultarTooltip, { passive: true });
+
+// Filtros
+$('#r-periodo').addEventListener('change', (ev) => {
+  rep.periodo = ev.target.value;
+  guardarLocal('rep-periodo', rep.periodo);
+  if (rep.periodo !== 'custom') { rep.desde = ''; cargarReporte(); }
+  else $('#r-desde').focus();
+});
+['#r-desde', '#r-hasta'].forEach((sel) => $(sel).addEventListener('change', () => {
+  rep.periodo = 'custom';
+  guardarLocal('rep-periodo', 'custom');
+  rep.desde = $('#r-desde').value;
+  rep.hasta = $('#r-hasta').value;
+  if (rep.desde && rep.hasta) cargarReporte();
+}));
+$('#r-categoria').addEventListener('change', (ev) => { rep.categoria = ev.target.value; renderReporte(); });
+$('#r-medida').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-medida]');
+  if (!b || b.dataset.medida === rep.medida) return;
+  rep.medida = b.dataset.medida;
+  guardarLocal('rep-medida', rep.medida);
+  prepararFiltrosReporte();
+  renderReporte();
+});
+let redibujo;
+window.addEventListener('resize', () => {
+  clearTimeout(redibujo);
+  redibujo = setTimeout(() => { if (vistaActual() === 'reportes' && rep.cubetas) dibujarColumnas($('#r-tiempo'), rep.cubetas); }, 150);
+});
+$('#btn-imprimir-reporte').addEventListener('click', () => window.print());
+window.addEventListener('beforeprint', () => { if (vistaActual() === 'reportes' && rep.cubetas) dibujarColumnas($('#r-tiempo'), rep.cubetas); });
+
+// ---------- Exportar a Excel ----------
+let promesaXLSX = null;
+const cargarXLSX = () => promesaXLSX ??= new Promise((ok, falla) => {
+  if (window.XLSX) return ok(window.XLSX);
+  const s = document.createElement('script');
+  s.src = 'vendor/xlsx.mini.min.js';
+  s.onload = () => ok(window.XLSX);
+  s.onerror = () => { promesaXLSX = null; falla(new Error('No se pudo cargar el generador de Excel. Revisá la conexión.')); };
+  document.head.appendChild(s);
+});
+// Fecha local → número de serie de Excel (así se puede filtrar y ordenar por fecha).
+const serialExcel = (valor) => {
+  if (!valor) return null;
+  const d = typeof valor === 'string' && valor.length === 10 ? fechaDeIso(valor) : new Date(valor);
+  return (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()) - Date.UTC(1899, 11, 30)) / 864e5;
+};
+
+function hoja(XLSX, encabezados, filas, formatos = {}, anchos = []) {
+  const ws = XLSX.utils.aoa_to_sheet([encabezados, ...filas]);
+  const rango = XLSX.utils.decode_range(ws['!ref']);
+  for (const [col, z] of Object.entries(formatos)) {
+    for (let r = 1; r <= rango.e.r; r++) {
+      const celda = ws[XLSX.utils.encode_cell({ r, c: Number(col) })];
+      if (celda && celda.t === 'n') celda.z = z;
+    }
+  }
+  ws['!cols'] = encabezados.map((h, i) => ({ wch: anchos[i] || Math.max(10, String(h).length + 2) }));
+  if (filas.length) ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: filas.length, c: encabezados.length - 1 } }) };
+  return ws;
+}
+
+$('#btn-excel').addEventListener('click', async (ev) => {
+  const boton = ev.currentTarget;
+  if (!rep.cargadoEn) return toast('Esperá a que termine de cargar el reporte.');
+  boton.disabled = true;
+  try {
+    const XLSX = await cargarXLSX();
+    const PESOS = '"$" #,##0.00', FECHA_HORA = 'dd/mm/yyyy hh:mm', FECHA = 'dd/mm/yyyy', NUM = '#,##0.###';
+    const filtro = (c) => !rep.categoria || c.categoria === rep.categoria;
+    const consumos = rep.consumos.filter(filtro);
+    const dias = diasEntre(rep.desde, rep.hasta);
+    const libro = XLSX.utils.book_new();
+
+    const costo = consumos.reduce((s, c) => s + (c.costo || 0), 0);
+    const resumen = XLSX.utils.aoa_to_sheet([
+      ['Reporte de insumos y equipos — Laboratorio de Logística'],
+      [],
+      ['Período', `${fmtDia(rep.desde)} al ${fmtDia(rep.hasta)} (${dias} días)`],
+      ['Categoría de insumo', rep.categoria || 'Todas'],
+      ['Generado', new Date().toLocaleString('es-UY')],
+      ['Generado por', nombreDe(estado.usuario?.id)],
+      [],
+      ['Costo de consumos', costo],
+      ['Retiros registrados', consumos.length],
+      ['Retiros sin precio cargado', consumos.filter((c) => c.costo == null).length],
+      ['Insumos distintos usados', new Set(consumos.map((c) => c.insumo_id)).size],
+      ['Préstamos de equipos', rep.prestamos.length],
+      ['Préstamos fuera de plazo', rep.prestamos.filter((p) => p.fuera_de_plazo).length],
+      ['Devoluciones con daño', rep.prestamos.filter((p) => p.condicion_devolucion === 'Con daño').length],
+      [],
+      ['El costo usa el precio unitario vigente al momento de cada retiro.'],
+    ]);
+    resumen.B8.z = PESOS;
+    resumen['!cols'] = [{ wch: 30 }, { wch: 36 }];
+    XLSX.utils.book_append_sheet(libro, resumen, 'Resumen');
+
+    XLSX.utils.book_append_sheet(libro, hoja(XLSX,
+      ['Fecha', 'Código', 'Insumo', 'Categoría', 'Cantidad', 'Unidad', 'Precio unitario', 'Costo', 'Práctica / motivo', 'Retiró', 'Registró'],
+      consumos.map((c) => [serialExcel(c.fecha_hora), c.codigo || '', c.insumo, c.categoria, c.cantidad, c.unidad_medida, c.precio_unitario, c.costo, c.practica_motivo, c.responsable, c.registrado_por || '']),
+      { 0: FECHA_HORA, 4: NUM, 6: PESOS, 7: PESOS }, [16, 12, 30, 16, 10, 10, 14, 14, 28, 20, 24]), 'Consumos');
+
+    const porInsumo = agrupar(consumos, (c) => c.insumo_id, (c) => ({ codigo: c.codigo, nombre: c.insumo, categoria: c.categoria, unidad: c.unidad_medida }));
+    const stockDe = new Map(estado.insumos.map((i) => [i.id, i]));
+    XLSX.utils.book_append_sheet(libro, hoja(XLSX,
+      ['Código', 'Insumo', 'Categoría', 'Unidad', 'Cantidad consumida', 'Retiros', 'Costo', 'Stock actual', 'Días que alcanza'],
+      porInsumo.sort((a, b) => b.costo - a.costo).map((g) => {
+        const i = stockDe.get(g.clave);
+        const porDia = g.cantidad / dias;
+        return [g.codigo || '', g.nombre, g.categoria, g.unidad, g.cantidad, g.retiros, g.costo, i?.stock_actual ?? null, i && porDia > 0 ? Math.floor(i.stock_actual / porDia) : null];
+      }),
+      { 4: NUM, 6: PESOS, 7: NUM }, [12, 30, 16, 10, 12, 9, 14, 12, 12]), 'Por insumo');
+
+    XLSX.utils.book_append_sheet(libro, hoja(XLSX,
+      ['Práctica / motivo', 'Retiros', 'Costo'],
+      agrupar(consumos, (c) => c.practica_motivo.trim()).sort((a, b) => b.costo - a.costo).map((g) => [g.clave, g.retiros, g.costo]),
+      { 2: PESOS }, [36, 10, 14]), 'Por práctica');
+
+    XLSX.utils.book_append_sheet(libro, hoja(XLSX,
+      ['Retiro', 'Código', 'Equipo', 'Categoría', 'Retiró', 'Contacto', 'Práctica / motivo', 'Devolución prevista', 'Devuelto', 'Estado', 'Condición', 'Fuera de plazo', 'Días', 'Obs. retiro', 'Obs. devolución', 'Registró', 'Recibió'],
+      rep.prestamos.map((p) => [serialExcel(p.fecha_retiro), p.codigo_serie, p.equipo, p.categoria, p.usuario_responsable, p.contacto || '', p.practica_motivo || '',
+        serialExcel(p.fecha_prevista), serialExcel(p.fecha_devolucion), p.estado, p.condicion_devolucion || '', p.fuera_de_plazo ? 'Sí' : 'No', p.dias,
+        p.observaciones_retiro || '', p.observaciones_devolucion || '', p.registrado_por || '', p.recibido_por || '']),
+      { 0: FECHA_HORA, 7: FECHA, 8: FECHA_HORA, 12: '0.0' }, [16, 12, 26, 14, 20, 16, 24, 12, 16, 10, 10, 8, 7, 24, 24, 22, 22]), 'Préstamos');
+
+    XLSX.utils.book_append_sheet(libro, hoja(XLSX,
+      ['Código', 'Insumo', 'Categoría', 'Stock', 'Mínimo', 'Unidad', 'Estado', 'Proveedor', 'Último precio', 'Fecha precio', 'Valor en stock'],
+      estado.insumos.filter(filtro).map((i) => [i.codigo || '', i.nombre, i.categoria, i.stock_actual, i.stock_minimo, i.unidad_medida,
+        ESTILO_ESTADO[i.estado_stock]?.texto || i.estado_stock, i.proveedor || '', i.ultimo_precio, serialExcel(i.fecha_ultimo_precio), i.valor_stock]),
+      { 3: NUM, 4: NUM, 8: PESOS, 9: FECHA, 10: PESOS }, [12, 30, 16, 10, 10, 10, 12, 20, 14, 12, 14]), 'Stock actual');
+
+    XLSX.utils.book_append_sheet(libro, hoja(XLSX,
+      ['Código / serie', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones'],
+      estado.equipos.map((e) => [e.codigo_serie, e.nombre, e.categoria, e.marca_modelo || '', e.ubicacion || '', e.estado, e.prestado_a || '',
+        serialExcel(e.prestamo_hasta), serialExcel(e.fecha_adquisicion), e.valor_compra, e.observaciones || '']),
+      { 7: FECHA, 8: FECHA, 9: PESOS }, [14, 26, 14, 20, 16, 14, 20, 12, 12, 14, 30]), 'Equipos');
+
+    XLSX.writeFile(libro, `reporte-insumos_${rep.desde}_a_${rep.hasta}.xlsx`, { compression: true });
+    toast('Excel descargado.');
+  } catch (err) {
+    toast(err.message);
   } finally {
     boton.disabled = false;
   }

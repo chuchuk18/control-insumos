@@ -10,12 +10,13 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 
 | Parte | Dónde vive | Qué hace |
 |---|---|---|
-| `index.html`, `app.js`, `styles.css` | GitHub Pages | Pantallas: Panel, Consumo, Insumos, Equipos, Historial |
+| `index.html`, `app.js`, `styles.css` | GitHub Pages | Pantallas: Panel, Consumo, Insumos, Equipos, Historial, Reportes |
 | `config.js` | GitHub Pages | Dirección del proyecto Supabase y clave pública (`anon`) |
 | `supabase/schema.sql` | Supabase | Tablas, descuento automático de stock, seguridad, tiempo real |
 | `supabase/02-usuarios-y-auditoria.sql` | Supabase | Perfiles, auditoría e historial (ejecutar después de `schema.sql`) |
 | `supabase/03-equipos.sql` | Supabase | Control de activos y préstamos de equipos (ejecutar después de `02`) |
 | `supabase/04-fotos.sql` | Supabase | Fotos de insumos y equipos en Storage (ejecutar después de `03`) |
+| `supabase/05-reportes.sql` | Supabase | Precio histórico de cada consumo y vistas para reportes (ejecutar después de `04`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -49,6 +50,24 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - Se guardan en un bucket **privado** de Supabase Storage (`fotos`): solo las ven usuarios con sesión.
 - Plan gratuito: 1 GB de almacenamiento (≈ 9.000 fotos) y 5 GB/mes de descarga.
 
+## Reportes
+
+- **Período:** últimos 7 o 30 días, este mes, mes anterior, últimos 3 meses, este año o fechas a elección.
+  Filtro por categoría de insumo y selector **Medir por: Costo / Retiros**.
+- **Indicadores:** costo de consumos, retiros, insumos usados y préstamos, con la variación contra el período anterior
+  del mismo largo.
+- **Gráficos:** consumo en el tiempo (por día, semana o mes según el largo del período), insumos más consumidos,
+  por práctica, por categoría y quién retira. Pasando el mouse o tocando una barra se ve el detalle.
+- **Proyección de reposición:** con el ritmo de consumo del período, cuántos días alcanza el stock de cada insumo,
+  hasta qué fecha, y cuánto comprar para cubrir 30 días más el mínimo (con costo estimado).
+- **Préstamos:** cantidad, devueltos, fuera de plazo, con daño, duración media y equipos más prestados.
+- **Sin consumo:** insumos con stock que no se usaron en el período y el valor inmovilizado.
+- **Excel:** descarga un archivo con hojas *Resumen, Consumos, Por insumo, Por práctica, Préstamos, Stock actual y Equipos*
+  (fechas reales, montos en $ y filtros en los encabezados).
+- **Imprimir / PDF:** imprime el reporte sin menús ni filtros; para PDF elegir *Guardar como PDF* en la impresora.
+- Cada consumo guarda el **precio unitario del momento**, así el costo de meses anteriores no cambia si después
+  sube el precio. Los consumos anteriores a este cambio toman el último precio que tenía el insumo.
+
 ## Usuarios y contraseñas
 
 - **Dar de alta a alguien:** Supabase → Authentication → Users → *Add user* → *Send invitation*.
@@ -81,9 +100,10 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
          email_confirmed_at = coalesce(email_confirmed_at, now()), updated_at = now()
    where email = 'persona@utec.edu.uy';
   ```
-- **Respaldo de datos:** Supabase → Table Editor → tabla → *Export to CSV*.
+- **Respaldo de datos:** pestaña **Reportes** → período *Este año* (o fechas a elección) → **Excel**.
+  También: Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 
@@ -104,5 +124,3 @@ Colores institucionales: celeste `#00a9e0` (`marca-500`) y azul de títulos `#1d
 ## Próximos pasos sugeridos
 
 - Movimientos de entrada/reposición (actualizando último precio y proveedor automáticamente).
-- Exportar historial de consumos a Excel por fecha o práctica.
-- Módulo de préstamos de equipos (las tablas `equipos` y `prestamos` ya existen).
