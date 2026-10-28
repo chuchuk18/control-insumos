@@ -78,9 +78,14 @@ const datos = {
     }));
   },
   async guardarInsumo(id, campos) {
-    const consulta = id ? sb.from('insumos').update(campos).eq('id', id) : sb.from('insumos').insert(campos);
-    const { error } = await consulta;
+    if (id) {
+      const { error } = await sb.from('insumos').update(campos).eq('id', id);
+      if (error) throw traducirError(error);
+      return id;
+    }
+    const { data, error } = await sb.from('insumos').insert(campos).select('id').single();
     if (error) throw traducirError(error);
+    return data.id;
   },
   async registrarConsumo(mov) {
     const { error } = await sb.from('movimientos_insumos').insert(mov);
@@ -92,9 +97,14 @@ const datos = {
     return data.map((e) => ({ ...e, valor_compra: aNumero(e.valor_compra) }));
   },
   async guardarEquipo(id, campos) {
-    const consulta = id ? sb.from('equipos').update(campos).eq('id', id) : sb.from('equipos').insert(campos);
-    const { error } = await consulta;
+    if (id) {
+      const { error } = await sb.from('equipos').update(campos).eq('id', id);
+      if (error) throw traducirError(error);
+      return id;
+    }
+    const { data, error } = await sb.from('equipos').insert(campos).select('id').single();
     if (error) throw traducirError(error);
+    return data.id;
   },
   async prestar(prestamo) {
     const { error } = await sb.from('prestamos').insert(prestamo);
@@ -119,6 +129,158 @@ const datos = {
     if (error) throw traducirError(error);
   },
 };
+
+// ---------- Fotos (Supabase Storage, bucket privado "fotos") ----------
+// Se sube una versión reducida (máx. 1024 px, ~100 KB) y una miniatura (240 px, ~10 KB).
+// Las direcciones firmadas duran 7 días y se reutilizan para que el navegador las guarde.
+async function reducirFoto(archivo) {
+  let fuente;
+  try {
+    fuente = await createImageBitmap(archivo, { imageOrientation: 'from-image' });
+  } catch {
+    fuente = await new Promise((ok, mal) => {
+      const img = new Image();
+      img.onload = () => ok(img);
+      img.onerror = () => mal(new Error('No se pudo leer la imagen. Probá con otra foto (JPG o PNG).'));
+      img.src = URL.createObjectURL(archivo);
+    });
+  }
+  const escalar = (max, calidad) => {
+    const k = Math.min(1, max / Math.max(fuente.width, fuente.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(fuente.width * k);
+    c.height = Math.round(fuente.height * k);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(fuente, 0, 0, c.width, c.height);
+    return new Promise((ok, mal) => c.toBlob((b) => (b ? ok(b) : mal(new Error('No se pudo procesar la imagen.'))), 'image/jpeg', calidad));
+  };
+  return { grande: await escalar(1024, 0.8), mini: await escalar(240, 0.72) };
+}
+
+const fotos = {
+  cache: (() => { try { return JSON.parse(localStorage.getItem('fotos-urls') || '{}'); } catch { return {}; } })(),
+  mini: (p) => String(p).replace(/\.jpg$/i, '_mini.jpg'),
+  url(p) { const c = p && this.cache[p]; return c && c.vence > Date.now() ? c.url : ''; },
+  guardarCache() { try { localStorage.setItem('fotos-urls', JSON.stringify(this.cache)); } catch {} },
+  async firmar(paths) {
+    const ahora = Date.now();
+    const faltan = [...new Set(paths.filter(Boolean))].filter((p) => !this.cache[p] || this.cache[p].vence - ahora < 6 * 3600e3);
+    if (!faltan.length) return;
+    const dias = 7;
+    const { data, error } = await sb.storage.from('fotos').createSignedUrls(faltan, dias * 86400);
+    if (error || !data) return;
+    for (const d of data) if (d.signedUrl) this.cache[d.path] = { url: d.signedUrl, vence: ahora + dias * 86400e3 - 60e3 };
+    for (const [p, c] of Object.entries(this.cache)) if (c.vence < ahora) delete this.cache[p];
+    this.guardarCache();
+  },
+  async subir(tipo, id, archivo) {
+    const { grande, mini } = await reducirFoto(archivo);
+    const base = `${tipo}/${id}/${Date.now()}`;
+    const opciones = { contentType: 'image/jpeg', cacheControl: '31536000', upsert: false };
+    const r1 = await sb.storage.from('fotos').upload(`${base}.jpg`, grande, opciones);
+    if (r1.error) throw new Error('No se pudo subir la foto: ' + r1.error.message);
+    const r2 = await sb.storage.from('fotos').upload(`${base}_mini.jpg`, mini, opciones);
+    if (r2.error) throw new Error('No se pudo subir la miniatura: ' + r2.error.message);
+    return `${base}.jpg`;
+  },
+  async borrar(p) {
+    if (!p) return;
+    await sb.storage.from('fotos').remove([p, this.mini(p)]).catch(() => {});
+    delete this.cache[p]; delete this.cache[this.mini(p)]; this.guardarCache();
+  },
+};
+
+const ICONO_FOTO = '<svg class="h-1/2 w-1/2" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 16l-5-5-8 8"/></svg>';
+const ICONO_CAMARA = '<svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8.5A1.5 1.5 0 014.5 7h2.1l1.2-2h8.4l1.2 2h2.1A1.5 1.5 0 0121 8.5v9a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 17.5z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+
+// Miniatura para listas: botón que amplía la foto, o un recuadro vacío si no tiene.
+function miniatura(path, clases = 'h-10 w-10') {
+  const url = path ? fotos.url(fotos.mini(path)) : '';
+  return url
+    ? `<button type="button" data-ver-foto="${esc(path)}" title="Ver foto" class="${clases} shrink-0 overflow-hidden rounded-lg bg-slate-100 ring-1 ring-slate-200"><img src="${esc(url)}" alt="" loading="lazy" class="h-full w-full object-cover" /></button>`
+    : `<span class="${clases} grid shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-300">${ICONO_FOTO}</span>`;
+}
+
+// Visor ampliado (acepta una ruta de Storage o una URL local de vista previa).
+async function verFoto(origen) {
+  const visor = $('#modal-foto');
+  const img = $('#foto-grande');
+  img.removeAttribute('src');
+  img.classList.add('hidden');
+  $('#foto-cargando').classList.remove('hidden');
+  if (!visor.open) visor.showModal();
+  let url = origen;
+  if (!/^(blob:|https?:)/.test(origen)) {
+    await fotos.firmar([origen]).catch(() => {});
+    url = fotos.url(origen);
+  }
+  if (!url) { $('#foto-cargando').textContent = 'No se pudo cargar la foto.'; return; }
+  img.onload = () => { $('#foto-cargando').classList.add('hidden'); img.classList.remove('hidden'); };
+  img.src = url;
+}
+document.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-ver-foto]');
+  if (b) { ev.preventDefault(); ev.stopPropagation(); verFoto(b.dataset.verFoto); }
+});
+{
+  const visor = $('#modal-foto');
+  $('[data-cerrar]', visor).addEventListener('click', () => visor.close());
+  visor.addEventListener('click', (ev) => { if (ev.target === visor || ev.target.id === 'foto-grande') visor.close(); });
+  visor.addEventListener('close', () => { $('#foto-cargando').textContent = 'Cargando foto…'; });
+}
+
+// Control del campo "Foto" de un formulario (prefijo "i" = insumo, "e" = equipo).
+function controlFoto(prefijo) {
+  const s = { actual: null, nueva: null, quitar: false, previa: null };
+  const input = $(`#${prefijo}-foto`), prev = $(`#${prefijo}-foto-prev`), quitar = $(`#${prefijo}-foto-quitar`), texto = $(`#${prefijo}-foto-texto`);
+  const limpiarPrevia = () => { if (s.previa) URL.revokeObjectURL(s.previa); s.previa = null; };
+  const pintar = () => {
+    const url = s.nueva ? s.previa : (!s.quitar && s.actual ? fotos.url(fotos.mini(s.actual)) : '');
+    prev.innerHTML = url ? `<img src="${esc(url)}" alt="" class="h-full w-full object-cover" />` : ICONO_CAMARA;
+    const hay = !!(s.nueva || (!s.quitar && s.actual));
+    quitar.classList.toggle('hidden', !hay);
+    texto.textContent = hay ? 'Cambiar foto' : 'Agregar foto';
+  };
+  input.addEventListener('change', () => {
+    const f = input.files[0];
+    input.value = '';
+    if (!f) return;
+    if (!/^image\//.test(f.type)) return toast('Elegí un archivo de imagen.');
+    if (f.size > 25e6) return toast('La imagen es demasiado grande (máx. 25 MB).');
+    limpiarPrevia();
+    s.nueva = f; s.previa = URL.createObjectURL(f); s.quitar = false;
+    pintar();
+  });
+  quitar.addEventListener('click', () => { limpiarPrevia(); s.nueva = null; s.quitar = true; pintar(); });
+  prev.addEventListener('click', () => {
+    if (s.nueva) verFoto(s.previa);
+    else if (!s.quitar && s.actual) verFoto(s.actual);
+  });
+  return {
+    cargar(path) { limpiarPrevia(); s.actual = path || null; s.nueva = null; s.quitar = false; pintar(); },
+    // Sube/quita la foto y devuelve el cambio a guardar, o null si no hubo cambios.
+    async aplicar(tipo, id) {
+      if (s.nueva) return { foto_path: await fotos.subir(tipo, id, s.nueva), anterior: s.actual };
+      if (s.quitar && s.actual) return { foto_path: null, anterior: s.actual };
+      return null;
+    },
+  };
+}
+
+// Guarda la foto de un registro ya guardado. Si falla, el resto de los datos queda guardado igual.
+async function guardarFoto(control, tipo, id, guardar) {
+  try {
+    const cambio = await control.aplicar(tipo, id);
+    if (!cambio) return '';
+    await guardar(id, { foto_path: cambio.foto_path });
+    if (cambio.anterior) fotos.borrar(cambio.anterior);
+    return cambio.foto_path ? ' Foto guardada.' : ' Foto quitada.';
+  } catch (err) {
+    return ` Pero la foto no se guardó: ${err.message}`;
+  }
+}
 
 // Valida y limpia el formulario de insumo (la base vuelve a validar).
 function prepararInsumo(f) {
@@ -182,6 +344,7 @@ async function cargarDatos() {
     estado.perfiles = perfiles;
     estado.historial = historial;
     estado.equipos = equipos;
+    await fotos.firmar([...insumos, ...equipos].map((x) => x.foto_path && fotos.mini(x.foto_path))).catch(() => {});
     renderTodo();
   } catch (err) {
     toast(`No se pudieron cargar los datos. ${err.message}`);
@@ -316,7 +479,8 @@ function renderStock() {
       const pct = Math.min((i.stock_actual / referencia) * 100, 100);
       return `
       <li class="px-4 py-3">
-        <div class="flex items-baseline gap-3">
+        <div class="flex items-center gap-3">
+          ${miniatura(i.foto_path)}
           <div class="min-w-0 flex-1">
             <p class="truncate text-sm font-medium">${esc(i.nombre)}</p>
             <p class="truncate text-xs text-slate-500">${detalle(i, esc(i.categoria))}</p>
@@ -401,10 +565,15 @@ function renderTablaInsumos() {
       return `
       <tr class="flex flex-wrap items-center gap-x-3 px-4 py-3 sm:table-row sm:p-0">
         <td class="min-w-0 flex-1 sm:px-4 sm:py-3">
-          <p class="font-medium">${esc(i.nombre)}</p>
-          ${i.codigo ? `<p class="font-mono text-xs text-slate-500">${esc(i.codigo)}</p>` : ''}
-          <p class="text-xs text-slate-500 sm:hidden">${[esc(i.categoria), i.proveedor && esc(i.proveedor)].filter(Boolean).join(' · ')}</p>
-          ${i.ultimo_precio != null ? `<p class="text-xs text-slate-500 sm:hidden">${precio}${i.fecha_ultimo_precio ? ` · ${fmtDia(i.fecha_ultimo_precio)}` : ''}</p>` : ''}
+          <div class="flex items-center gap-3">
+            ${miniatura(i.foto_path, 'h-11 w-11')}
+            <div class="min-w-0">
+              <p class="font-medium">${esc(i.nombre)}</p>
+              ${i.codigo ? `<p class="font-mono text-xs text-slate-500">${esc(i.codigo)}</p>` : ''}
+              <p class="text-xs text-slate-500 sm:hidden">${[esc(i.categoria), i.proveedor && esc(i.proveedor)].filter(Boolean).join(' · ')}</p>
+              ${i.ultimo_precio != null ? `<p class="text-xs text-slate-500 sm:hidden">${precio}${i.fecha_ultimo_precio ? ` · ${fmtDia(i.fecha_ultimo_precio)}` : ''}</p>` : ''}
+            </div>
+          </div>
         </td>
         <td class="hidden px-4 py-3 text-slate-600 lg:table-cell">${esc(i.categoria)}</td>
         <td class="hidden px-4 py-3 text-slate-600 sm:table-cell">${i.proveedor ? esc(i.proveedor) : '<span class="text-slate-400">—</span>'}</td>
@@ -440,6 +609,9 @@ function actualizarInfoInsumo() {
       (i.estado_stock === 'bajo' ? ' · ⚠ bajo mínimo' : '')
     : '';
   $('#c-cantidad').max = i ? i.stock_actual : '';
+  const conFoto = !!(i?.foto_path && fotos.url(fotos.mini(i.foto_path)));
+  $('#c-foto').classList.toggle('hidden', !conFoto);
+  $('#c-foto').innerHTML = conFoto ? miniatura(i.foto_path, 'h-16 w-16') : '';
 }
 
 $('#c-insumo').addEventListener('change', () => {
@@ -509,9 +681,12 @@ function abrirModal(insumo = null) {
   campos.namedItem('fecha_ultimo_precio').value = insumo?.fecha_ultimo_precio ?? '';
   precioOriginal = insumo?.ultimo_precio ?? null;
   actualizarUnidadPrecio();
+  fotoInsumo.cargar(insumo?.foto_path);
   modal.showModal();
   campos.namedItem(insumo ? 'nombre' : 'codigo').focus();
 }
+
+const fotoInsumo = controlFoto('i');
 
 // Si cambia el precio y la fecha no se tocó a mano, se pone la fecha de hoy.
 let precioOriginal = null;
@@ -549,9 +724,10 @@ formInsumo.addEventListener('submit', async (ev) => {
   const boton = formInsumo.querySelector('[type=submit]');
   boton.disabled = true;
   try {
-    await datos.guardarInsumo(id ? Number(id) : null, campos);
+    const idGuardado = await datos.guardarInsumo(id ? Number(id) : null, campos);
+    const avisoFoto = await guardarFoto(fotoInsumo, 'insumos', idGuardado, (x, c) => datos.guardarInsumo(x, c));
     modal.close();
-    toast(id ? 'Insumo actualizado.' : 'Insumo creado.');
+    toast((id ? 'Insumo actualizado.' : 'Insumo creado.') + avisoFoto);
     await cargarDatos();
   } catch (err) {
     mostrarError($('#i-error'), err.message);
@@ -740,7 +916,8 @@ function renderEquipos() {
         : '';
     return `
       <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${e.estado === 'De baja' ? 'opacity-60' : ''}">
-        <div class="min-w-0 flex-1 basis-56">
+        ${miniatura(e.foto_path, 'h-12 w-12')}
+        <div class="min-w-0 flex-1 basis-48">
           <p class="font-medium"><span class="mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${st.punto}"></span>${esc(e.nombre)}
             <span class="ml-1 font-mono text-xs font-normal text-slate-500">${esc(e.codigo_serie)}</span></p>
           ${datos2 ? `<p class="truncate text-xs text-slate-500">${datos2}</p>` : ''}
@@ -781,7 +958,8 @@ const modalEtiquetas = $('#modal-etiquetas');
   m.addEventListener('click', (ev) => { if (ev.target === m) m.close(); });
 });
 const buscarEquipo = (id) => estado.equipos.find((e) => e.id === Number(id));
-const tarjetaEquipo = (e) => `<p class="font-medium">${esc(e.nombre)}</p><p class="font-mono text-xs text-slate-500">${esc(e.codigo_serie)}${e.ubicacion ? ` · ${esc(e.ubicacion)}` : ''}</p>`;
+const tarjetaEquipo = (e) => `<div class="flex items-center gap-3">${e.foto_path ? miniatura(e.foto_path, 'h-14 w-14') : ''}<div class="min-w-0"><p class="font-medium">${esc(e.nombre)}</p><p class="font-mono text-xs text-slate-500">${esc(e.codigo_serie)}${e.ubicacion ? ` · ${esc(e.ubicacion)}` : ''}</p></div></div>`;
+const fotoEquipo = controlFoto('e');
 
 function abrirEquipoForm(e = null) {
   formEquipo.reset();
@@ -795,6 +973,7 @@ function abrirEquipoForm(e = null) {
   $('#e-estado').classList.toggle('hidden', prestado);
   $('#e-estado-prestado').classList.toggle('hidden', !prestado);
   $('#e-estado').value = prestado ? 'Disponible' : (e?.estado || 'Disponible');
+  fotoEquipo.cargar(e?.foto_path);
   modalEquipo.showModal();
   f.namedItem(e ? 'nombre' : 'codigo_serie').focus();
 }
@@ -869,9 +1048,10 @@ formEquipo.addEventListener('submit', (ev) => {
   if (!campos.nombre) return mostrarError($('#e-error'), 'El nombre es obligatorio.');
   if (campos.valor_compra !== null && !(campos.valor_compra >= 0)) return mostrarError($('#e-error'), 'El valor debe ser un número mayor o igual a 0.');
   enviar(formEquipo, $('#e-error'), async () => {
-    await datos.guardarEquipo(id ? Number(id) : null, campos);
+    const idGuardado = await datos.guardarEquipo(id ? Number(id) : null, campos);
+    const avisoFoto = await guardarFoto(fotoEquipo, 'equipos', idGuardado, (x, c) => datos.guardarEquipo(x, c));
     modalEquipo.close();
-    toast(id ? 'Equipo actualizado.' : 'Equipo dado de alta.');
+    toast((id ? 'Equipo actualizado.' : 'Equipo dado de alta.') + avisoFoto);
     await cargarDatos();
   });
 });

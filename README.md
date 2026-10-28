@@ -15,6 +15,7 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 | `supabase/schema.sql` | Supabase | Tablas, descuento automático de stock, seguridad, tiempo real |
 | `supabase/02-usuarios-y-auditoria.sql` | Supabase | Perfiles, auditoría e historial (ejecutar después de `schema.sql`) |
 | `supabase/03-equipos.sql` | Supabase | Control de activos y préstamos de equipos (ejecutar después de `02`) |
+| `supabase/04-fotos.sql` | Supabase | Fotos de insumos y equipos en Storage (ejecutar después de `03`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -38,6 +39,15 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - **Etiquetas QR:** botón *Etiquetas QR* → *Imprimir*. Al escanear una etiqueta se abre la app directo
   para prestar o recibir ese equipo (con la sesión iniciada en el celular).
 - Los préstamos no se borran y guardan quién los registró y quién recibió la devolución.
+
+## Fotos
+
+- Cada insumo y equipo puede tener una foto (desde la cámara o la galería) al darlo de alta o editarlo.
+- Antes de subirla, la app la reduce: versión de máx. 1024 px (~100 KB) y miniatura de 240 px (~10 KB).
+  Las listas cargan solo las miniaturas; tocándolas se ve la foto completa.
+- Se ven en Panel, Insumos, Equipos, **Registrar consumo** (para identificar el producto) y al prestar o recibir.
+- Se guardan en un bucket **privado** de Supabase Storage (`fotos`): solo las ven usuarios con sesión.
+- Plan gratuito: 1 GB de almacenamiento (≈ 9.000 fotos) y 5 GB/mes de descarga.
 
 ## Usuarios y contraseñas
 
@@ -73,7 +83,7 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
   ```
 - **Respaldo de datos:** Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 

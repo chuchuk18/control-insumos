@@ -1,6 +1,6 @@
 // Service worker: guarda la "cáscara" de la app para que abra rápido.
 // Los datos (Supabase) siempre se piden en vivo: nunca se muestra stock viejo.
-const CACHE = 'insumos-web-v3';
+const CACHE = 'insumos-web-v4';
 const CASCARA = ['./', 'index.html', 'app.js', 'config.js', 'styles.css', 'manifest.webmanifest',
   'vendor/supabase.js', 'vendor/qrcode.js', 'icons/icon-192.png'];
 
