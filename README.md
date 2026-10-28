@@ -10,10 +10,11 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 
 | Parte | Dónde vive | Qué hace |
 |---|---|---|
-| `index.html`, `app.js`, `styles.css` | GitHub Pages | Pantallas: Panel, Registrar consumo, Insumos, Historial |
+| `index.html`, `app.js`, `styles.css` | GitHub Pages | Pantallas: Panel, Consumo, Insumos, Equipos, Historial |
 | `config.js` | GitHub Pages | Dirección del proyecto Supabase y clave pública (`anon`) |
 | `supabase/schema.sql` | Supabase | Tablas, descuento automático de stock, seguridad, tiempo real |
 | `supabase/02-usuarios-y-auditoria.sql` | Supabase | Perfiles, auditoría e historial (ejecutar después de `schema.sql`) |
+| `supabase/03-equipos.sql` | Supabase | Control de activos y préstamos de equipos (ejecutar después de `02`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -27,6 +28,17 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - Alerta de reposición cuando el stock es igual o menor al mínimo.
 - Código y nombre de insumo únicos (sin distinguir mayúsculas).
 
+## Equipos (control de activos y préstamos)
+
+- **Inventario:** código/serie, nombre, categoría, marca/modelo, ubicación, fecha y valor de compra, observaciones.
+- **Estados:** Disponible · Prestado · En mantenimiento · De baja. *Prestado* lo manejan solo los préstamos.
+- **Prestar:** quién retira, contacto, práctica/motivo y fecha de devolución. Solo se presta lo que está *Disponible*.
+- **Recibir:** si vuelve con daño pasa a *En mantenimiento*; si no, a *Disponible*. También se puede extender el plazo.
+- **Vencidos:** préstamos con la fecha de devolución pasada; se ven en Equipos y en el Panel.
+- **Etiquetas QR:** botón *Etiquetas QR* → *Imprimir*. Al escanear una etiqueta se abre la app directo
+  para prestar o recibir ese equipo (con la sesión iniciada en el celular).
+- Los préstamos no se borran y guardan quién los registró y quién recibió la devolución.
+
 ## Usuarios y contraseñas
 
 - **Dar de alta a alguien:** Supabase → Authentication → Users → *Add user* → *Send invitation*.
@@ -38,22 +50,30 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - Nadie, ni el administrador, puede ver las contraseñas: Supabase las guarda cifradas.
 - Los enlaces de los correos van a la *Site URL* de Supabase (Authentication → URL Configuration):
   tiene que ser la dirección pública de la app.
-- El correo gratuito de Supabase envía pocos mensajes por hora: alcanza para un laboratorio.
+- El correo gratuito de Supabase permite **2 correos por hora** para todo el proyecto. Si se agota, se puede asignar
+  una contraseña provisoria desde el SQL Editor (ver abajo) o configurar un servicio de correo propio (SMTP).
 
 ## Quién hizo qué
 
 - Cada consumo guarda el usuario que lo cargó (además del *responsable* que retiró el material).
 - Cada alta y modificación de insumos queda en `auditoria` con los valores anteriores y nuevos.
   Los ajustes manuales de stock se marcan como **Ajuste de stock**.
-- La pestaña **Historial** muestra todo, con filtros por tipo y usuario, y la lista de usuarios:
+- La pestaña **Historial** muestra consumos, préstamos, devoluciones, altas y modificaciones, con filtros, y la lista de usuarios:
   quién está conectado ahora y el último acceso de cada uno.
 - La base completa estos datos sola: no se pueden falsear desde la app.
 
 ## Administración
 
+- **Contraseña provisoria sin correo** (SQL Editor; reemplazar contraseña y correo, no guardar la consulta):
+  ```sql
+  update auth.users
+     set encrypted_password = extensions.crypt('CONTRASEÑA', extensions.gen_salt('bf')),
+         email_confirmed_at = coalesce(email_confirmed_at, now()), updated_at = now()
+   where email = 'persona@utec.edu.uy';
+  ```
 - **Respaldo de datos:** Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `supabase/02-usuarios-y-auditoria.sql`, y `supabase/datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 

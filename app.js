@@ -35,7 +35,12 @@ function traducirError(error) {
   const msg = String(error?.message || error || '');
   if (msg.includes('STOCK_INSUFICIENTE')) return new Error('Stock insuficiente: alguien retiró antes que vos. Revisá el disponible.');
   if (msg.includes('INSUMO_INEXISTENTE')) return new Error('El insumo seleccionado ya no existe.');
-  if (error?.code === '23505') return new Error('Ya existe un insumo con ese nombre o código.');
+  if (msg.includes('EQUIPO_NO_DISPONIBLE')) return new Error('Ese equipo ya no está disponible (alguien lo prestó o está en mantenimiento).');
+  if (msg.includes('EQUIPO_INEXISTENTE')) return new Error('El equipo ya no existe.');
+  if (msg.includes('FALTA_RESPONSABLE')) return new Error('Indicá quién retira el equipo.');
+  if (msg.includes('ESTADO_PRESTADO_MANUAL')) return new Error('El estado "Prestado" se maneja con préstamos y devoluciones.');
+  if (msg.includes('PRESTAMO_YA_DEVUELTO')) return new Error('Ese préstamo ya fue devuelto.');
+  if (error?.code === '23505') return new Error(/equipo/i.test(msg) ? 'Ya existe un equipo con ese código.' : 'Ya existe un registro con ese nombre o código.');
   if (error?.code === '23514') return new Error('Hay un valor fuera de rango: revisá cantidades y precios.');
   if (error?.code === '42501' || /jwt|token/i.test(msg)) return new Error('Tu sesión venció. Volvé a iniciar sesión.');
   if (/failed to fetch|network/i.test(msg)) return new Error('Sin conexión. Revisá internet e intentá de nuevo.');
@@ -79,6 +84,24 @@ const datos = {
   },
   async registrarConsumo(mov) {
     const { error } = await sb.from('movimientos_insumos').insert(mov);
+    if (error) throw traducirError(error);
+  },
+  async equipos() {
+    const { data, error } = await sb.from('v_equipos').select('*').order('categoria').order('nombre');
+    if (error) throw traducirError(error);
+    return data.map((e) => ({ ...e, valor_compra: aNumero(e.valor_compra) }));
+  },
+  async guardarEquipo(id, campos) {
+    const consulta = id ? sb.from('equipos').update(campos).eq('id', id) : sb.from('equipos').insert(campos);
+    const { error } = await consulta;
+    if (error) throw traducirError(error);
+  },
+  async prestar(prestamo) {
+    const { error } = await sb.from('prestamos').insert(prestamo);
+    if (error) throw traducirError(error);
+  },
+  async actualizarPrestamo(id, campos) {
+    const { error } = await sb.from('prestamos').update(campos).eq('id', id);
     if (error) throw traducirError(error);
   },
   async perfiles() {
@@ -134,7 +157,7 @@ function mostrarError(el, mensaje) {
 }
 
 // ---------- Estado ----------
-const estado = { insumos: [], movimientos: [], perfiles: [], historial: [], conectados: [], usuario: null };
+const estado = { insumos: [], movimientos: [], equipos: [], perfiles: [], historial: [], conectados: [], usuario: null };
 
 const ESTILO_ESTADO = {
   ok:      { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', barra: 'bg-emerald-500', texto: 'OK' },
@@ -151,12 +174,14 @@ async function cargarDatos() {
     estado.insumos = insumos;
     estado.movimientos = movimientos;
     // Historial y usuarios: si fallan (p. ej. falta la migración), el resto sigue funcionando.
-    const [perfiles, historial] = await Promise.all([
+    const [perfiles, historial, equipos] = await Promise.all([
       datos.perfiles().catch(() => estado.perfiles),
       datos.historial().catch(() => estado.historial),
+      datos.equipos().catch(() => estado.equipos),
     ]);
     estado.perfiles = perfiles;
     estado.historial = historial;
+    estado.equipos = equipos;
     renderTodo();
   } catch (err) {
     toast(`No se pudieron cargar los datos. ${err.message}`);
@@ -164,9 +189,17 @@ async function cargarDatos() {
 }
 
 // ---------- Navegación por pestañas (hash) ----------
-const VISTAS = ['panel', 'consumo', 'insumos', 'historial'];
+const VISTAS = ['panel', 'consumo', 'insumos', 'equipos', 'historial'];
+
+let equipoPendiente = null;   // id que llegó por QR, se abre al tener los datos
 
 function mostrarVista() {
+  const qr = location.hash.match(/^#equipo=(\d+)/);
+  if (qr) {
+    equipoPendiente = Number(qr[1]);
+    history.replaceState(null, '', location.pathname + '#equipos');
+    abrirEquipoPendiente();
+  }
   const actual = VISTAS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'panel';
   $$('[data-vista]').forEach((s) => s.classList.toggle('hidden', s.dataset.vista !== actual));
   $$('[data-nav]').forEach((a) =>
@@ -189,6 +222,9 @@ function renderTodo() {
   renderHistorial();
   renderUsuarios();
   renderCuentaEncabezado();
+  renderEquipos();
+  renderVencidos();
+  abrirEquipoPendiente();
 }
 
 function renderKpis() {
@@ -560,6 +596,8 @@ function conectarEventos() {
     .channel('control-insumos', { config: { presence: { key: yo.id } } })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'insumos' }, programarRecarga)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'movimientos_insumos' }, programarRecarga)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'equipos' }, programarRecarga)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'prestamos' }, programarRecarga)
     .on('presence', { event: 'sync' }, () => {
       // Una entrada por usuario aunque tenga la app abierta en varios dispositivos.
       estado.conectados = Object.entries(canal.presenceState()).map(([id, sesiones]) => ({
@@ -645,6 +683,279 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+// ---------- Equipos: inventario, préstamos y devoluciones ----------
+const ESTILO_EQUIPO = {
+  'Disponible':       { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', punto: 'bg-emerald-500' },
+  'Prestado':         { badge: 'bg-marca-50 text-marca-700 ring-marca-200',       punto: 'bg-marca-500' },
+  'En mantenimiento': { badge: 'bg-amber-50 text-amber-800 ring-amber-200',       punto: 'bg-amber-500' },
+  'De baja':          { badge: 'bg-slate-100 text-slate-500 ring-slate-200',      punto: 'bg-slate-400' },
+};
+const fechaCorta = (iso) => (iso ? new Date(iso).toLocaleDateString('es-UY', { day: '2-digit', month: '2-digit' }) : '');
+const sumarDias = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
+const urlEquipo = (id) => `${location.origin}${location.pathname}#equipo=${id}`;
+
+function equiposFiltrados() {
+  const texto = $('#eq-texto').value.trim().toLowerCase();
+  const est = $('#eq-estado').value;
+  const cat = $('#eq-categoria').value;
+  return estado.equipos.filter((e) =>
+    (!est || (est === 'vencido' ? e.vencido : e.estado === est)) &&
+    (!cat || e.categoria === cat) &&
+    (!texto || [e.nombre, e.codigo_serie, e.marca_modelo, e.ubicacion, e.prestado_a].some((v) => v && v.toLowerCase().includes(texto))));
+}
+
+function renderEquipos() {
+  const eq = estado.equipos;
+  const cuenta = (f) => eq.filter(f).length;
+  $('#ke-total').textContent = cuenta((e) => e.estado !== 'De baja');
+  $('#ke-disponibles').textContent = cuenta((e) => e.estado === 'Disponible');
+  $('#ke-prestados').textContent = cuenta((e) => e.estado === 'Prestado');
+  $('#ke-vencidos').textContent = cuenta((e) => e.vencido);
+  $('#ke-mantenimiento').textContent = cuenta((e) => e.estado === 'En mantenimiento');
+
+  const categorias = [...new Set(eq.map((e) => e.categoria))].sort();
+  const sel = $('#eq-categoria'); const elegida = sel.value;
+  sel.innerHTML = '<option value="">Todas las categorías</option>' + categorias.map((c) => `<option>${esc(c)}</option>`).join('');
+  sel.value = categorias.includes(elegida) ? elegida : '';
+  $('#lista-categorias-equipos').innerHTML = categorias.map((c) => `<option value="${esc(c)}"></option>`).join('');
+  $('#lista-ubicaciones').innerHTML = [...new Set(eq.map((e) => e.ubicacion).filter(Boolean))].sort().map((u) => `<option value="${esc(u)}"></option>`).join('');
+
+  const lista = equiposFiltrados();
+  if (!lista.length) {
+    $('#lista-equipos').innerHTML = `<li class="px-4 py-8 text-center text-sm text-slate-500">${
+      eq.length ? 'Sin resultados para el filtro.' : 'Todavía no hay equipos. Cargalos con "Nuevo equipo".'}</li>`;
+    return;
+  }
+  $('#lista-equipos').innerHTML = lista.map((e) => {
+    const st = ESTILO_EQUIPO[e.estado] || ESTILO_EQUIPO['De baja'];
+    const datos2 = [e.categoria, e.marca_modelo, e.ubicacion && `📍 ${e.ubicacion}`].filter(Boolean).map(esc).join(' · ');
+    const prestamo = e.estado === 'Prestado' && e.prestamo_id
+      ? `<p class="mt-1 text-xs ${e.vencido ? 'font-semibold text-red-700' : 'text-marca-700'}">
+           ${e.vencido ? '⚠ Vencido · ' : ''}Prestado a <strong>${esc(e.prestado_a)}</strong> desde ${fechaCorta(e.prestamo_desde)}${e.prestamo_hasta ? ` · devuelve ${fmtDia(e.prestamo_hasta)}` : ''}${e.prestamo_motivo ? ` · ${esc(e.prestamo_motivo)}` : ''}
+         </p>` : '';
+    const accion = e.estado === 'Disponible'
+      ? `<button type="button" data-prestar="${e.id}" class="rounded-lg bg-marca-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-marca-600">Prestar</button>`
+      : e.estado === 'Prestado' && e.prestamo_id
+        ? `<button type="button" data-devolver="${e.id}" class="rounded-lg border border-marca-500 px-3 py-1.5 text-sm font-semibold text-marca-700 hover:bg-marca-50">Recibir</button>`
+        : '';
+    return `
+      <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${e.estado === 'De baja' ? 'opacity-60' : ''}">
+        <div class="min-w-0 flex-1 basis-56">
+          <p class="font-medium"><span class="mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${st.punto}"></span>${esc(e.nombre)}
+            <span class="ml-1 font-mono text-xs font-normal text-slate-500">${esc(e.codigo_serie)}</span></p>
+          ${datos2 ? `<p class="truncate text-xs text-slate-500">${datos2}</p>` : ''}
+          ${prestamo}
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${st.badge}">${esc(e.estado)}</span>
+          ${accion}
+          <button type="button" data-editar-equipo="${e.id}" class="rounded-lg px-2.5 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
+        </div>
+      </li>`;
+  }).join('');
+}
+
+function renderVencidos() {
+  const vencidos = estado.equipos.filter((e) => e.vencido);
+  $('#alertas-vencidos').classList.toggle('hidden', !vencidos.length);
+  $('#lista-vencidos').innerHTML = vencidos.map((e) => `
+    <li class="flex items-center gap-3 px-4 py-2.5">
+      <span class="min-w-0 flex-1">
+        <span class="block truncate text-sm font-medium">${esc(e.nombre)} <span class="font-mono text-xs font-normal text-slate-500">${esc(e.codigo_serie)}</span></span>
+        <span class="block truncate text-xs text-slate-500">${esc(e.prestado_a)}${e.prestamo_contacto ? ` · ${esc(e.prestamo_contacto)}` : ''}</span>
+      </span>
+      <span class="shrink-0 text-right text-xs font-semibold text-red-700">Debía volver<br>${fmtDia(e.prestamo_hasta)}</span>
+    </li>`).join('');
+}
+
+['#eq-texto'].forEach((s) => $(s).addEventListener('input', renderEquipos));
+['#eq-estado', '#eq-categoria'].forEach((s) => $(s).addEventListener('change', renderEquipos));
+$$('[data-filtro-equipo]').forEach((b) => b.addEventListener('click', () => { $('#eq-estado').value = b.dataset.filtroEquipo; renderEquipos(); }));
+
+const modalEquipo = $('#modal-equipo'), formEquipo = $('#form-equipo');
+const modalPrestamo = $('#modal-prestamo'), formPrestamo = $('#form-prestamo');
+const modalDevolucion = $('#modal-devolucion'), formDevolucion = $('#form-devolucion');
+const modalEtiquetas = $('#modal-etiquetas');
+[modalEquipo, modalPrestamo, modalDevolucion, modalEtiquetas].forEach((m) => {
+  $$('[data-cerrar]', m).forEach((b) => b.addEventListener('click', () => m.close()));
+  m.addEventListener('click', (ev) => { if (ev.target === m) m.close(); });
+});
+const buscarEquipo = (id) => estado.equipos.find((e) => e.id === Number(id));
+const tarjetaEquipo = (e) => `<p class="font-medium">${esc(e.nombre)}</p><p class="font-mono text-xs text-slate-500">${esc(e.codigo_serie)}${e.ubicacion ? ` · ${esc(e.ubicacion)}` : ''}</p>`;
+
+function abrirEquipoForm(e = null) {
+  formEquipo.reset();
+  mostrarError($('#e-error'), '');
+  $('#eq-modal-titulo').textContent = e ? 'Editar equipo' : 'Nuevo equipo';
+  const f = formEquipo.elements;
+  f.namedItem('editando_id').value = e?.id ?? '';
+  for (const c of ['codigo_serie', 'nombre', 'categoria', 'marca_modelo', 'ubicacion', 'fecha_adquisicion', 'valor_compra', 'observaciones'])
+    f.namedItem(c).value = e?.[c] ?? '';
+  const prestado = e?.estado === 'Prestado';
+  $('#e-estado').classList.toggle('hidden', prestado);
+  $('#e-estado-prestado').classList.toggle('hidden', !prestado);
+  $('#e-estado').value = prestado ? 'Disponible' : (e?.estado || 'Disponible');
+  modalEquipo.showModal();
+  f.namedItem(e ? 'nombre' : 'codigo_serie').focus();
+}
+
+function abrirPrestamo(e) {
+  formPrestamo.reset();
+  mostrarError($('#pr-error'), '');
+  formPrestamo.dataset.equipo = e.id;
+  $('#pr-equipo').innerHTML = tarjetaEquipo(e);
+  $('#pr-fecha').value = sumarDias(0);
+  $('#pr-fecha').min = sumarDias(0);
+  modalPrestamo.showModal();
+  $('#pr-responsable').focus();
+}
+
+function abrirDevolucion(e) {
+  formDevolucion.reset();
+  mostrarError($('#dv-error'), '');
+  formDevolucion.dataset.prestamo = e.prestamo_id;
+  $('#dv-resumen').innerHTML = `${tarjetaEquipo(e)}
+    <p class="mt-1.5 text-sm">Prestado a <strong>${esc(e.prestado_a)}</strong> el ${fechaCorta(e.prestamo_desde)}${e.prestamo_contacto ? ` · ${esc(e.prestamo_contacto)}` : ''}</p>
+    ${e.prestamo_hasta ? `<p class="text-xs ${e.vencido ? 'font-semibold text-red-700' : 'text-slate-500'}">Debía volver el ${fmtDia(e.prestamo_hasta)}${e.vencido ? ' (vencido)' : ''}</p>` : ''}`;
+  $('#dv-nueva-fecha').value = sumarDias(1);
+  $('#dv-nueva-fecha').min = sumarDias(0);
+  modalDevolucion.showModal();
+}
+
+// Desde el QR: abre la acción que corresponde según el estado del equipo.
+function abrirEquipoPendiente() {
+  if (!equipoPendiente || !sesionActiva || !estado.equipos.length) return;
+  const e = buscarEquipo(equipoPendiente);
+  equipoPendiente = null;
+  if (!e) return toast('No se encontró el equipo de esa etiqueta.');
+  $('#eq-texto').value = e.codigo_serie;
+  renderEquipos();
+  if (e.estado === 'Disponible') abrirPrestamo(e);
+  else if (e.estado === 'Prestado' && e.prestamo_id) abrirDevolucion(e);
+  else abrirEquipoForm(e);
+}
+
+$('#btn-nuevo-equipo').addEventListener('click', () => abrirEquipoForm());
+$('#lista-equipos').addEventListener('click', (ev) => {
+  const b = ev.target.closest('button'); if (!b) return;
+  if (b.dataset.prestar) abrirPrestamo(buscarEquipo(b.dataset.prestar));
+  if (b.dataset.devolver) abrirDevolucion(buscarEquipo(b.dataset.devolver));
+  if (b.dataset.editarEquipo) abrirEquipoForm(buscarEquipo(b.dataset.editarEquipo));
+});
+
+async function enviar(form, errorEl, accion) {
+  const boton = form.querySelector('[type=submit]');
+  boton.disabled = true;
+  try { await accion(); } catch (err) { mostrarError(errorEl, err.message); } finally { boton.disabled = false; }
+}
+
+formEquipo.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const { editando_id: id, ...f } = Object.fromEntries(new FormData(formEquipo));
+  const t = (v) => String(v ?? '').trim();
+  const campos = {
+    codigo_serie: t(f.codigo_serie).toUpperCase(),
+    nombre: t(f.nombre),
+    categoria: t(f.categoria) || 'General',
+    marca_modelo: t(f.marca_modelo) || null,
+    ubicacion: t(f.ubicacion) || null,
+    fecha_adquisicion: t(f.fecha_adquisicion) || null,
+    valor_compra: t(f.valor_compra) === '' ? null : Number(f.valor_compra),
+    observaciones: t(f.observaciones) || null,
+  };
+  const actual = id ? buscarEquipo(id) : null;
+  if (actual?.estado !== 'Prestado') campos.estado = f.estado || 'Disponible';
+  if (!campos.codigo_serie) return mostrarError($('#e-error'), 'El código o número de serie es obligatorio.');
+  if (!campos.nombre) return mostrarError($('#e-error'), 'El nombre es obligatorio.');
+  if (campos.valor_compra !== null && !(campos.valor_compra >= 0)) return mostrarError($('#e-error'), 'El valor debe ser un número mayor o igual a 0.');
+  enviar(formEquipo, $('#e-error'), async () => {
+    await datos.guardarEquipo(id ? Number(id) : null, campos);
+    modalEquipo.close();
+    toast(id ? 'Equipo actualizado.' : 'Equipo dado de alta.');
+    await cargarDatos();
+  });
+});
+
+formPrestamo.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const f = Object.fromEntries(new FormData(formPrestamo));
+  const prestamo = {
+    equipo_id: Number(formPrestamo.dataset.equipo),
+    usuario_responsable: f.usuario_responsable.trim(),
+    contacto: f.contacto.trim() || null,
+    practica_motivo: f.practica_motivo.trim() || null,
+    fecha_prevista: f.fecha_prevista || null,
+    observaciones_retiro: f.observaciones_retiro.trim() || null,
+  };
+  if (!prestamo.usuario_responsable) return mostrarError($('#pr-error'), 'Indicá quién retira el equipo.');
+  if (!prestamo.fecha_prevista) return mostrarError($('#pr-error'), 'Indicá cuándo lo tiene que devolver.');
+  enviar(formPrestamo, $('#pr-error'), async () => {
+    await datos.prestar(prestamo);
+    modalPrestamo.close();
+    toast(`Préstamo registrado: ${prestamo.usuario_responsable}.`);
+    await cargarDatos();
+  });
+});
+
+formDevolucion.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const f = Object.fromEntries(new FormData(formDevolucion));
+  enviar(formDevolucion, $('#dv-error'), async () => {
+    await datos.actualizarPrestamo(Number(formDevolucion.dataset.prestamo), {
+      estado: 'Devuelto',
+      condicion_devolucion: f.condicion_devolucion || 'Bien',
+      observaciones_devolucion: f.observaciones_devolucion.trim() || null,
+    });
+    modalDevolucion.close();
+    toast(f.condicion_devolucion === 'Con daño' ? 'Devolución registrada: el equipo pasó a mantenimiento.' : 'Devolución registrada: el equipo quedó disponible.');
+    await cargarDatos();
+  });
+});
+
+$('#btn-extender').addEventListener('click', async () => {
+  const fecha = $('#dv-nueva-fecha').value;
+  if (!fecha) return mostrarError($('#dv-error'), 'Elegí la nueva fecha.');
+  try {
+    await datos.actualizarPrestamo(Number(formDevolucion.dataset.prestamo), { fecha_prevista: fecha });
+    modalDevolucion.close();
+    toast(`Plazo extendido hasta el ${fmtDia(fecha)}.`);
+    await cargarDatos();
+  } catch (err) { mostrarError($('#dv-error'), err.message); }
+});
+
+// Etiquetas QR: una por equipo filtrado; al escanearla abre "#equipo=ID".
+function etiquetaHTML(e, tam) {
+  let qrSvg = '';
+  if (window.qrcode) {
+    const qr = qrcode(0, 'M'); qr.addData(urlEquipo(e.id)); qr.make();
+    qrSvg = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+  }
+  return `<div class="etiqueta flex flex-col items-center rounded-lg border border-dashed border-slate-300 p-3 text-center">
+    <div class="${tam}">${qrSvg}</div>
+    <p class="mt-2 text-sm font-semibold leading-tight">${esc(e.nombre)}</p>
+    <p class="font-mono text-xs">${esc(e.codigo_serie)}</p>
+    <p class="text-[10px] text-slate-500">Laboratorio · Control de Insumos</p>
+  </div>`;
+}
+$('#btn-etiquetas').addEventListener('click', () => {
+  const lista = equiposFiltrados().filter((e) => e.estado !== 'De baja');
+  $('#vista-etiquetas').innerHTML = lista.length
+    ? lista.map((e) => etiquetaHTML(e, 'h-28 w-28')).join('')
+    : '<p class="col-span-full py-6 text-center text-sm text-slate-500">No hay equipos en la lista filtrada.</p>';
+  $$('#vista-etiquetas svg').forEach((s) => s.setAttribute('class', 'h-full w-full'));
+  $('#btn-imprimir-etiquetas').disabled = !lista.length;
+  modalEtiquetas.showModal();
+});
+$('#btn-imprimir-etiquetas').addEventListener('click', () => {
+  const lista = equiposFiltrados().filter((e) => e.estado !== 'De baja');
+  const hoja = $('#hoja-etiquetas');
+  hoja.innerHTML = lista.map((e) => etiquetaHTML(e, 'h-[32mm] w-[32mm]')).join('');
+  $$('#hoja-etiquetas svg').forEach((s) => s.setAttribute('class', 'h-full w-full'));
+  modalEtiquetas.close();
+  document.body.classList.add('imprimiendo-etiquetas');
+  setTimeout(() => { window.print(); document.body.classList.remove('imprimiendo-etiquetas'); }, 50);
+});
+
 // ---------- Usuarios: nombres, conectados y último acceso ----------
 const miPerfil = () => estado.perfiles.find((p) => p.id === estado.usuario?.id);
 function nombreDe(id) {
@@ -670,6 +981,7 @@ function renderCuentaEncabezado() {
   const nombre = p?.nombre || estado.usuario?.email || '';
   $('#avatar-iniciales').textContent = iniciales(nombre);
   $('#usuario-nombre').textContent = p?.nombre || estado.usuario?.email || '';
+  $('#usuario').title = `Mi cuenta · ${p?.nombre || estado.usuario?.email || ''}`;
 }
 
 function renderUsuarios() {
@@ -705,13 +1017,15 @@ function renderUsuarios() {
 
 // ---------- Historial ----------
 const ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', categoria: 'Categoría', stock_actual: 'Stock',
-  stock_minimo: 'Mínimo', unidad_medida: 'Unidad', proveedor: 'Proveedor', ultimo_precio: 'Últ. precio', fecha_ultimo_precio: 'Fecha precio' };
+  stock_minimo: 'Mínimo', unidad_medida: 'Unidad', proveedor: 'Proveedor', ultimo_precio: 'Últ. precio', fecha_ultimo_precio: 'Fecha precio',
+  codigo_serie: 'Código', marca_modelo: 'Marca/modelo', ubicacion: 'Ubicación', estado: 'Estado',
+  fecha_adquisicion: 'Fecha compra', valor_compra: 'Valor', observaciones: 'Observaciones' };
 
 function valorLegible(campo, v) {
   if (v == null || v === '') return '—';
-  if (campo === 'ultimo_precio') return fmtMoneda(Number(v));
+  if (campo === 'ultimo_precio' || campo === 'valor_compra') return fmtMoneda(Number(v));
   if (campo === 'stock_actual' || campo === 'stock_minimo') return fmtNum.format(Number(v));
-  if (campo === 'fecha_ultimo_precio') return fmtDia(v);
+  if (campo === 'fecha_ultimo_precio' || campo === 'fecha_adquisicion') return fmtDia(v);
   return String(v);
 }
 
@@ -724,27 +1038,39 @@ function renderHistorial() {
   const lista = estado.historial.filter((h) =>
     (!tipo || (tipo === 'ajuste' ? esAjusteDeStock(h) : h.tipo === tipo)) &&
     (!usuario || h.usuario_id === usuario) &&
-    (!texto || [h.insumo, h.codigo, h.motivo, h.responsable].some((v) => v && v.toLowerCase().includes(texto))));
+    (!texto || [h.item, h.codigo, h.motivo, h.responsable].some((v) => v && v.toLowerCase().includes(texto))));
 
   const ICONOS = {
     consumo: ['bg-red-50 text-red-600', '<path stroke-linecap="round" d="M5 12h14"/>'],
     alta: ['bg-emerald-50 text-emerald-600', '<path stroke-linecap="round" d="M12 5v14M5 12h14"/>'],
     edicion: ['bg-marca-50 text-marca-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M4 20h4L19 9l-4-4L4 16v4z"/>'],
+    prestamo: ['bg-violet-50 text-violet-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-5-5l5 5-5 5"/>'],
+    devolucion: ['bg-teal-50 text-teal-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M19 12H5m5-5l-5 5 5 5"/>'],
   };
 
   $('#lista-historial').innerHTML = lista.length
     ? lista.slice(0, 200).map((h) => {
         const [color, icono] = ICONOS[h.tipo] || ICONOS.edicion;
         let titulo, detalle = '';
+        const esEquipo = h.modulo === 'equipos';
+        const etiquetaEquipo = esEquipo ? `<span class="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600">Equipo</span>` : '';
+        const codigo = h.codigo ? ` <span class="font-mono text-xs text-slate-400">${esc(h.codigo)}</span>` : '';
         if (h.tipo === 'consumo') {
-          titulo = `Consumo de <strong>${fmtNum.format(h.cantidad)} ${esc(h.unidad_medida)}</strong> · ${esc(h.insumo)}`;
+          titulo = `Consumo de <strong>${fmtNum.format(h.cantidad)} ${esc(h.unidad_medida)}</strong> · ${esc(h.item)}`;
           detalle = `${esc(h.motivo)} · retiró ${esc(h.responsable)}`;
+        } else if (h.tipo === 'prestamo') {
+          titulo = `${etiquetaEquipo}Préstamo de <strong>${esc(h.item)}</strong>${codigo} a <strong>${esc(h.responsable)}</strong>`;
+          detalle = [h.motivo && esc(h.motivo), h.detalle && esc(h.detalle)].filter(Boolean).join(' · ');
+        } else if (h.tipo === 'devolucion') {
+          const conDanio = /daño/i.test(h.detalle || '');
+          titulo = `${etiquetaEquipo}Devolución de <strong>${esc(h.item)}</strong>${codigo} por ${esc(h.responsable)}`;
+          detalle = `<span class="${conDanio ? 'font-semibold text-amber-700' : ''}">${esc(h.detalle || 'Bien')}</span>`;
         } else if (h.tipo === 'alta') {
-          titulo = `Alta de <strong>${esc(h.insumo)}</strong>`;
+          titulo = `${etiquetaEquipo}Alta de <strong>${esc(h.item)}</strong>${codigo}`;
           const inicial = h.cambios?.stock_actual?.[1];
-          detalle = inicial != null ? `Stock inicial: ${fmtNum.format(Number(inicial))} ${esc(h.unidad_medida)}` : '';
+          detalle = !esEquipo && inicial != null ? `Stock inicial: ${fmtNum.format(Number(inicial))} ${esc(h.unidad_medida)}` : '';
         } else {
-          titulo = `${esAjusteDeStock(h) ? '<span class="mr-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">Ajuste de stock</span>' : 'Modificación de '}<strong>${esc(h.insumo)}</strong>`;
+          titulo = `${etiquetaEquipo}${esAjusteDeStock(h) ? '<span class="mr-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">Ajuste de stock</span>' : 'Modificación de '}<strong>${esc(h.item)}</strong>${codigo}`;
           detalle = Object.entries(h.cambios || {})
             .map(([campo, [antes, despues]]) => `${ETIQUETAS[campo] || campo}: ${esc(valorLegible(campo, antes))} → <strong class="font-semibold text-slate-700">${esc(valorLegible(campo, despues))}</strong>`)
             .join(' · ');
