@@ -269,7 +269,7 @@
 
       <div class="rounded-xl border border-slate-200 bg-white">
         <div class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
-          <input id="eq-texto" type="search" placeholder="Nombre, código, persona…" class="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+          <input id="eq-texto" type="search" placeholder="Nombre, serie, activo fijo, persona…" class="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
           <select id="eq-estado" class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-marca-500 focus:outline-none">
             <option value="">Todos los estados</option>
             <option value="Disponible">Disponibles</option>
@@ -617,12 +617,22 @@
       <input type="hidden" name="editando_id" />
       <div class="grid grid-cols-3 gap-3">
         <div>
-          <label class="mb-1 block text-sm font-medium" for="e-codigo">Código / serie</label>
+          <label class="mb-1 block text-sm font-medium" for="e-codigo">N.º de serie</label>
           <input id="e-codigo" name="codigo_serie" type="text" required maxlength="40" autocapitalize="characters" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 font-mono uppercase" />
         </div>
         <div class="col-span-2">
           <label class="mb-1 block text-sm font-medium" for="e-nombre">Nombre</label>
           <input id="e-nombre" name="nombre" type="text" required maxlength="120" placeholder="Ej: Balanza de plataforma 300 kg" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="mb-1 block text-sm font-medium" for="e-af-utec">Activo fijo UTEC</label>
+          <input id="e-af-utec" name="activo_fijo_utec" type="text" maxlength="40" autocapitalize="characters" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 font-mono uppercase" />
+        </div>
+        <div>
+          <label class="mb-1 block text-sm font-medium" for="e-af-n">Activo fijo N</label>
+          <input id="e-af-n" name="activo_fijo_n" type="text" maxlength="40" autocapitalize="characters" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 font-mono uppercase" />
         </div>
       </div>
       <div class="grid grid-cols-2 gap-3">

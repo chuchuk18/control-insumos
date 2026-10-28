@@ -40,7 +40,9 @@ function traducirError(error) {
   if (msg.includes('FALTA_RESPONSABLE')) return new Error('Indicá quién retira el equipo.');
   if (msg.includes('ESTADO_PRESTADO_MANUAL')) return new Error('El estado "Prestado" se maneja con préstamos y devoluciones.');
   if (msg.includes('PRESTAMO_YA_DEVUELTO')) return new Error('Ese préstamo ya fue devuelto.');
-  if (error?.code === '23505') return new Error(/equipo/i.test(msg) ? 'Ya existe un equipo con ese código.' : 'Ya existe un registro con ese nombre o código.');
+  if (error?.code === '23505' && /activo_utec/.test(msg)) return new Error('Ya hay otro equipo con ese número de activo fijo UTEC.');
+  if (error?.code === '23505' && /activo_n/.test(msg)) return new Error('Ya hay otro equipo con ese número de activo fijo N.');
+  if (error?.code === '23505') return new Error(/equipo/i.test(msg) ? 'Ya existe un equipo con ese número de serie.' : 'Ya existe un registro con ese nombre o código.');
   if (error?.code === '23514') return new Error('Hay un valor fuera de rango: revisá cantidades y precios.');
   if (error?.code === '42501' || /jwt|token/i.test(msg)) return new Error('Tu sesión venció. Volvé a iniciar sesión.');
   if (/failed to fetch|network/i.test(msg)) return new Error('Sin conexión. Revisá internet e intentá de nuevo.');
@@ -862,6 +864,8 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 }
 
 // ---------- Equipos: inventario, préstamos y devoluciones ----------
+// Códigos de activo fijo del equipo, para mostrar debajo del nombre.
+const codigosActivo = (e) => [e.activo_fijo_utec && `AF UTEC ${e.activo_fijo_utec}`, e.activo_fijo_n && `AF N ${e.activo_fijo_n}`].filter(Boolean).join(' · ');
 const ESTILO_EQUIPO = {
   'Disponible':       { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', punto: 'bg-emerald-500' },
   'Prestado':         { badge: 'bg-marca-50 text-marca-700 ring-marca-200',       punto: 'bg-marca-500' },
@@ -879,7 +883,7 @@ function equiposFiltrados() {
   return estado.equipos.filter((e) =>
     (!est || (est === 'vencido' ? e.vencido : e.estado === est)) &&
     (!cat || e.categoria === cat) &&
-    (!texto || [e.nombre, e.codigo_serie, e.marca_modelo, e.ubicacion, e.prestado_a].some((v) => v && v.toLowerCase().includes(texto))));
+    (!texto || [e.nombre, e.codigo_serie, e.activo_fijo_utec, e.activo_fijo_n, e.marca_modelo, e.ubicacion, e.prestado_a].some((v) => v && v.toLowerCase().includes(texto))));
 }
 
 function renderEquipos() {
@@ -922,6 +926,7 @@ function renderEquipos() {
         <div class="min-w-0 flex-1 basis-48">
           <p class="font-medium"><span class="mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${st.punto}"></span>${esc(e.nombre)}
             <span class="ml-1 font-mono text-xs font-normal text-slate-500">${esc(e.codigo_serie)}</span></p>
+          ${codigosActivo(e) ? `<p class="truncate font-mono text-xs text-slate-600">${esc(codigosActivo(e))}</p>` : ''}
           ${datos2 ? `<p class="truncate text-xs text-slate-500">${datos2}</p>` : ''}
           ${prestamo}
         </div>
@@ -960,7 +965,7 @@ const modalEtiquetas = $('#modal-etiquetas');
   m.addEventListener('click', (ev) => { if (ev.target === m) m.close(); });
 });
 const buscarEquipo = (id) => estado.equipos.find((e) => e.id === Number(id));
-const tarjetaEquipo = (e) => `<div class="flex items-center gap-3">${e.foto_path ? miniatura(e.foto_path, 'h-14 w-14') : ''}<div class="min-w-0"><p class="font-medium">${esc(e.nombre)}</p><p class="font-mono text-xs text-slate-500">${esc(e.codigo_serie)}${e.ubicacion ? ` · ${esc(e.ubicacion)}` : ''}</p></div></div>`;
+const tarjetaEquipo = (e) => `<div class="flex items-center gap-3">${e.foto_path ? miniatura(e.foto_path, 'h-14 w-14') : ''}<div class="min-w-0"><p class="font-medium">${esc(e.nombre)}</p><p class="font-mono text-xs text-slate-500">${esc(e.codigo_serie)}${e.ubicacion ? ` · ${esc(e.ubicacion)}` : ''}</p>${codigosActivo(e) ? `<p class="font-mono text-xs text-slate-500">${esc(codigosActivo(e))}</p>` : ''}</div></div>`;
 const fotoEquipo = controlFoto('e');
 
 function abrirEquipoForm(e = null) {
@@ -969,7 +974,7 @@ function abrirEquipoForm(e = null) {
   $('#eq-modal-titulo').textContent = e ? 'Editar equipo' : 'Nuevo equipo';
   const f = formEquipo.elements;
   f.namedItem('editando_id').value = e?.id ?? '';
-  for (const c of ['codigo_serie', 'nombre', 'categoria', 'marca_modelo', 'ubicacion', 'fecha_adquisicion', 'valor_compra', 'observaciones'])
+  for (const c of ['codigo_serie', 'activo_fijo_utec', 'activo_fijo_n', 'nombre', 'categoria', 'marca_modelo', 'ubicacion', 'fecha_adquisicion', 'valor_compra', 'observaciones'])
     f.namedItem(c).value = e?.[c] ?? '';
   const prestado = e?.estado === 'Prestado';
   $('#e-estado').classList.toggle('hidden', prestado);
@@ -1036,6 +1041,8 @@ formEquipo.addEventListener('submit', (ev) => {
   const t = (v) => String(v ?? '').trim();
   const campos = {
     codigo_serie: t(f.codigo_serie).toUpperCase(),
+    activo_fijo_utec: t(f.activo_fijo_utec).toUpperCase() || null,
+    activo_fijo_n: t(f.activo_fijo_n).toUpperCase() || null,
     nombre: t(f.nombre),
     categoria: t(f.categoria) || 'General',
     marca_modelo: t(f.marca_modelo) || null,
@@ -1046,7 +1053,7 @@ formEquipo.addEventListener('submit', (ev) => {
   };
   const actual = id ? buscarEquipo(id) : null;
   if (actual?.estado !== 'Prestado') campos.estado = f.estado || 'Disponible';
-  if (!campos.codigo_serie) return mostrarError($('#e-error'), 'El código o número de serie es obligatorio.');
+  if (!campos.codigo_serie) return mostrarError($('#e-error'), 'El número de serie es obligatorio.');
   if (!campos.nombre) return mostrarError($('#e-error'), 'El nombre es obligatorio.');
   if (campos.valor_compra !== null && !(campos.valor_compra >= 0)) return mostrarError($('#e-error'), 'El valor debe ser un número mayor o igual a 0.');
   enviar(formEquipo, $('#e-error'), async () => {
@@ -1116,6 +1123,8 @@ function etiquetaHTML(e, tam) {
     <div class="${tam}">${qrSvg}</div>
     <p class="mt-2 text-sm font-semibold leading-tight">${esc(e.nombre)}</p>
     <p class="font-mono text-xs">${esc(e.codigo_serie)}</p>
+    ${e.activo_fijo_utec ? `<p class="font-mono text-[11px]">AF UTEC ${esc(e.activo_fijo_utec)}</p>` : ''}
+    ${e.activo_fijo_n ? `<p class="font-mono text-[11px]">AF N ${esc(e.activo_fijo_n)}</p>` : ''}
     <p class="text-[10px] text-slate-500">Laboratorio · Control de Insumos</p>
   </div>`;
 }
@@ -1200,7 +1209,7 @@ function renderUsuarios() {
 // ---------- Historial ----------
 const ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', categoria: 'Categoría', stock_actual: 'Stock',
   stock_minimo: 'Mínimo', unidad_medida: 'Unidad', proveedor: 'Proveedor', ultimo_precio: 'Últ. precio', fecha_ultimo_precio: 'Fecha precio',
-  codigo_serie: 'Código', marca_modelo: 'Marca/modelo', ubicacion: 'Ubicación', estado: 'Estado',
+  codigo_serie: 'N.º de serie', activo_fijo_utec: 'Activo fijo UTEC', activo_fijo_n: 'Activo fijo N', marca_modelo: 'Marca/modelo', ubicacion: 'Ubicación', estado: 'Estado',
   fecha_adquisicion: 'Fecha compra', valor_compra: 'Valor', observaciones: 'Observaciones' };
 
 function valorLegible(campo, v) {
@@ -1880,11 +1889,11 @@ $('#btn-excel').addEventListener('click', async (ev) => {
       { 2: PESOS }, [36, 10, 14]), 'Por práctica');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Retiro', 'Código', 'Equipo', 'Categoría', 'Retiró', 'Contacto', 'Práctica / motivo', 'Devolución prevista', 'Devuelto', 'Estado', 'Condición', 'Fuera de plazo', 'Días', 'Obs. retiro', 'Obs. devolución', 'Registró', 'Recibió'],
-      rep.prestamos.map((p) => [serialExcel(p.fecha_retiro), p.codigo_serie, p.equipo, p.categoria, p.usuario_responsable, p.contacto || '', p.practica_motivo || '',
+      ['Retiro', 'N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Retiró', 'Contacto', 'Práctica / motivo', 'Devolución prevista', 'Devuelto', 'Estado', 'Condición', 'Fuera de plazo', 'Días', 'Obs. retiro', 'Obs. devolución', 'Registró', 'Recibió'],
+      rep.prestamos.map((p) => [serialExcel(p.fecha_retiro), p.codigo_serie, p.activo_fijo_utec || '', p.activo_fijo_n || '', p.equipo, p.categoria, p.usuario_responsable, p.contacto || '', p.practica_motivo || '',
         serialExcel(p.fecha_prevista), serialExcel(p.fecha_devolucion), p.estado, p.condicion_devolucion || '', p.fuera_de_plazo ? 'Sí' : 'No', p.dias,
         p.observaciones_retiro || '', p.observaciones_devolucion || '', p.registrado_por || '', p.recibido_por || '']),
-      { 0: FECHA_HORA, 7: FECHA, 8: FECHA_HORA, 12: '0.0' }, [16, 12, 26, 14, 20, 16, 24, 12, 16, 10, 10, 8, 7, 24, 24, 22, 22]), 'Préstamos');
+      { 0: FECHA_HORA, 9: FECHA, 10: FECHA_HORA, 14: '0.0' }, [16, 12, 14, 14, 26, 14, 20, 16, 24, 12, 16, 10, 10, 8, 7, 24, 24, 22, 22]), 'Préstamos');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
       ['Código', 'Insumo', 'Categoría', 'Stock', 'Mínimo', 'Unidad', 'Estado', 'Proveedor', 'Último precio', 'Fecha precio', 'Valor en stock'],
@@ -1893,10 +1902,10 @@ $('#btn-excel').addEventListener('click', async (ev) => {
       { 3: NUM, 4: NUM, 8: PESOS, 9: FECHA, 10: PESOS }, [12, 30, 16, 10, 10, 10, 12, 20, 14, 12, 14]), 'Stock actual');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Código / serie', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones'],
-      estado.equipos.map((e) => [e.codigo_serie, e.nombre, e.categoria, e.marca_modelo || '', e.ubicacion || '', e.estado, e.prestado_a || '',
+      ['N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones'],
+      estado.equipos.map((e) => [e.codigo_serie, e.activo_fijo_utec || '', e.activo_fijo_n || '', e.nombre, e.categoria, e.marca_modelo || '', e.ubicacion || '', e.estado, e.prestado_a || '',
         serialExcel(e.prestamo_hasta), serialExcel(e.fecha_adquisicion), e.valor_compra, e.observaciones || '']),
-      { 7: FECHA, 8: FECHA, 9: PESOS }, [14, 26, 14, 20, 16, 14, 20, 12, 12, 14, 30]), 'Equipos');
+      { 9: FECHA, 10: FECHA, 11: PESOS }, [14, 16, 14, 26, 14, 20, 16, 14, 20, 12, 12, 14, 30]), 'Equipos');
 
     XLSX.writeFile(libro, `reporte-insumos_${rep.desde}_a_${rep.hasta}.xlsx`, { compression: true });
     toast('Excel descargado.');

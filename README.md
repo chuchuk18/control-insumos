@@ -17,6 +17,7 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 | `supabase/03-equipos.sql` | Supabase | Control de activos y préstamos de equipos (ejecutar después de `02`) |
 | `supabase/04-fotos.sql` | Supabase | Fotos de insumos y equipos en Storage (ejecutar después de `03`) |
 | `supabase/05-reportes.sql` | Supabase | Precio histórico de cada consumo y vistas para reportes (ejecutar después de `04`) |
+| `supabase/06-activos-fijos.sql` | Supabase | Códigos de activo fijo UTEC y N en equipos (ejecutar después de `05`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -32,7 +33,9 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 
 ## Equipos (control de activos y préstamos)
 
-- **Inventario:** código/serie, nombre, categoría, marca/modelo, ubicación, fecha y valor de compra, observaciones.
+- **Inventario:** N.º de serie, **activo fijo UTEC**, **activo fijo N**, nombre, categoría, marca/modelo, ubicación, fecha y valor de compra, observaciones.
+- Los códigos de activo fijo son opcionales y no se pueden repetir entre equipos. Se buscan desde la lista,
+  salen en las etiquetas QR, en el historial de cambios y en el Excel.
 - **Estados:** Disponible · Prestado · En mantenimiento · De baja. *Prestado* lo manejan solo los préstamos.
 - **Prestar:** quién retira, contacto, práctica/motivo y fecha de devolución. Solo se presta lo que está *Disponible*.
 - **Recibir:** si vuelve con daño pasa a *En mantenimiento*; si no, a *Disponible*. También se puede extender el plazo.
@@ -103,7 +106,7 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - **Respaldo de datos:** pestaña **Reportes** → período *Este año* (o fechas a elección) → **Excel**.
   También: Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql` y `datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 
