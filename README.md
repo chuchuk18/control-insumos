@@ -18,6 +18,7 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 | `supabase/04-fotos.sql` | Supabase | Fotos de insumos y equipos en Storage (ejecutar después de `03`) |
 | `supabase/05-reportes.sql` | Supabase | Precio histórico de cada consumo y vistas para reportes (ejecutar después de `04`) |
 | `supabase/06-activos-fijos.sql` | Supabase | Códigos de activo fijo UTEC y N en equipos (ejecutar después de `05`) |
+| `supabase/07-conjuntos.sql` | Supabase | Conjuntos de equipos: armado, préstamo y devolución por partes (ejecutar después de `06`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -36,6 +37,13 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - **Inventario:** N.º de serie, **activo fijo UTEC**, **activo fijo N**, nombre, categoría, marca/modelo, ubicación, fecha y valor de compra, observaciones.
 - Los códigos de activo fijo son opcionales y no se pueden repetir entre equipos. Se buscan desde la lista,
   salen en las etiquetas QR, en el historial de cambios y en el Excel.
+- **Conjuntos** (p. ej. *Pórtico RF* = lector + 4 antenas): en la ficha del equipo, **Es un conjunto** →
+  agregar los componentes. Cada componente pertenece a un solo conjunto y conserva sus códigos de activo fijo.
+  - Se prestan juntos: al prestar el conjunto, todos los componentes pasan a *Prestado*; no se prestan por separado.
+  - Para prestar, todas las partes tienen que estar *Disponibles*; si no, la app avisa cuál falta.
+  - Al recibir, se desmarca lo que volvió con daño o no volvió: eso pasa a *En mantenimiento* y el resto queda disponible.
+  - Mientras está prestado no se agregan ni se sacan componentes. Los cambios de armado quedan en el Historial.
+  - El QR de un componente abre su conjunto. En el Excel, la hoja Equipos indica el tipo y el conjunto de cada uno.
 - **Estados:** Disponible · Prestado · En mantenimiento · De baja. *Prestado* lo manejan solo los préstamos.
 - **Prestar:** quién retira, contacto, práctica/motivo y fecha de devolución. Solo se presta lo que está *Disponible*.
 - **Recibir:** si vuelve con daño pasa a *En mantenimiento*; si no, a *Disponible*. También se puede extender el plazo.
@@ -106,7 +114,7 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - **Respaldo de datos:** pestaña **Reportes** → período *Este año* (o fechas a elección) → **Excel**.
   También: Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 

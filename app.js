@@ -39,6 +39,14 @@ function traducirError(error) {
   if (msg.includes('EQUIPO_INEXISTENTE')) return new Error('El equipo ya no existe.');
   if (msg.includes('FALTA_RESPONSABLE')) return new Error('Indicá quién retira el equipo.');
   if (msg.includes('ESTADO_PRESTADO_MANUAL')) return new Error('El estado "Prestado" se maneja con préstamos y devoluciones.');
+  const det = (codigo) => (msg.match(new RegExp(codigo + ':([^\\n]+)')) || [])[1]?.trim();
+  if (msg.includes('COMPONENTE_DE_CONJUNTO')) return new Error(`Este equipo forma parte del conjunto "${det('COMPONENTE_DE_CONJUNTO') || ''}": se presta junto con el conjunto.`);
+  if (msg.includes('COMPONENTES_NO_DISPONIBLES')) return new Error(`No se puede prestar el conjunto porque hay partes que no están disponibles: ${det('COMPONENTES_NO_DISPONIBLES') || ''}. Sacalas del conjunto o esperá a que estén disponibles.`);
+  if (msg.includes('COMPONENTE_PRESTADO')) return new Error('Ese componente está prestado con su conjunto: se puede cambiar cuando vuelva.');
+  if (msg.includes('CONJUNTO_PRESTADO')) return new Error('El conjunto está prestado: agregá o sacá componentes cuando vuelva.');
+  if (msg.includes('CONJUNTO_DENTRO_DE_CONJUNTO')) return new Error('Un conjunto no puede ser componente de otro conjunto.');
+  if (msg.includes('CONJUNTO_CON_COMPONENTES')) return new Error('Primero sacá los componentes del conjunto.');
+  if (msg.includes('CONJUNTO_INVALIDO')) return new Error('El conjunto elegido no es válido.');
   if (msg.includes('PRESTAMO_YA_DEVUELTO')) return new Error('Ese préstamo ya fue devuelto.');
   if (error?.code === '23505' && /activo_utec/.test(msg)) return new Error('Ya hay otro equipo con ese número de activo fijo UTEC.');
   if (error?.code === '23505' && /activo_n/.test(msg)) return new Error('Ya hay otro equipo con ese número de activo fijo N.');
@@ -96,7 +104,7 @@ const datos = {
   async equipos() {
     const { data, error } = await sb.from('v_equipos').select('*').order('categoria').order('nombre');
     if (error) throw traducirError(error);
-    return data.map((e) => ({ ...e, valor_compra: aNumero(e.valor_compra) }));
+    return data.map((e) => ({ ...e, valor_compra: aNumero(e.valor_compra), valor_componentes: aNumero(e.valor_componentes) }));
   },
   async guardarEquipo(id, campos) {
     if (id) {
@@ -908,35 +916,69 @@ function renderEquipos() {
       eq.length ? 'Sin resultados para el filtro.' : 'Todavía no hay equipos. Cargalos con "Nuevo equipo".'}</li>`;
     return;
   }
-  $('#lista-equipos').innerHTML = lista.map((e) => {
-    const st = ESTILO_EQUIPO[e.estado] || ESTILO_EQUIPO['De baja'];
-    const datos2 = [e.categoria, e.marca_modelo, e.ubicacion && `📍 ${e.ubicacion}`].filter(Boolean).map(esc).join(' · ');
-    const prestamo = e.estado === 'Prestado' && e.prestamo_id
-      ? `<p class="mt-1 text-xs ${e.vencido ? 'font-semibold text-red-700' : 'text-marca-700'}">
-           ${e.vencido ? '⚠ Vencido · ' : ''}Prestado a <strong>${esc(e.prestado_a)}</strong> desde ${fechaCorta(e.prestamo_desde)}${e.prestamo_hasta ? ` · devuelve ${fmtDia(e.prestamo_hasta)}` : ''}${e.prestamo_motivo ? ` · ${esc(e.prestamo_motivo)}` : ''}
-         </p>` : '';
-    const accion = e.estado === 'Disponible'
-      ? `<button type="button" data-prestar="${e.id}" class="rounded-lg bg-marca-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-marca-600">Prestar</button>`
-      : e.estado === 'Prestado' && e.prestamo_id
-        ? `<button type="button" data-devolver="${e.id}" class="rounded-lg border border-marca-500 px-3 py-1.5 text-sm font-semibold text-marca-700 hover:bg-marca-50">Recibir</button>`
-        : '';
-    return `
-      <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${e.estado === 'De baja' ? 'opacity-60' : ''}">
-        ${miniatura(e.foto_path, 'h-12 w-12')}
-        <div class="min-w-0 flex-1 basis-48">
-          <p class="font-medium"><span class="mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${st.punto}"></span>${esc(e.nombre)}
-            <span class="ml-1 font-mono text-xs font-normal text-slate-500">${esc(e.codigo_serie)}</span></p>
-          ${codigosActivo(e) ? `<p class="truncate font-mono text-xs text-slate-600">${esc(codigosActivo(e))}</p>` : ''}
-          ${datos2 ? `<p class="truncate text-xs text-slate-500">${datos2}</p>` : ''}
-          ${prestamo}
-        </div>
-        <div class="flex shrink-0 items-center gap-2">
-          <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${st.badge}">${esc(e.estado)}</span>
-          ${accion}
-          <button type="button" data-editar-equipo="${e.id}" class="rounded-lg px-2.5 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
-        </div>
-      </li>`;
-  }).join('');
+  // Los componentes se muestran dentro de su conjunto (si el filtro encuentra un componente, se ve su conjunto).
+  const visibles = [], vistos = new Set();
+  for (const e of lista) {
+    const arriba = (e.conjunto_id && buscarEquipo(e.conjunto_id)) || e;
+    if (!vistos.has(arriba.id)) { vistos.add(arriba.id); visibles.push(arriba); }
+  }
+  $('#lista-equipos').innerHTML = visibles.map((e) =>
+    filaEquipo(e) + (e.es_conjunto ? componentesDe(e.id).map(filaComponente).join('') : '')).join('');
+}
+
+const componentesDe = (id) => estado.equipos.filter((x) => x.conjunto_id === id).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+const valorConjunto = (e) => (e.valor_compra == null && e.valor_componentes == null ? null : (e.valor_compra || 0) + (e.valor_componentes || 0));
+
+function filaEquipo(e) {
+  const st = ESTILO_EQUIPO[e.estado] || ESTILO_EQUIPO['De baja'];
+  const datos2 = [e.categoria, e.marca_modelo, e.ubicacion && `📍 ${e.ubicacion}`].filter(Boolean).map(esc).join(' · ');
+  const prestamo = e.estado === 'Prestado' && e.prestamo_id
+    ? `<p class="mt-1 text-xs ${e.vencido ? 'font-semibold text-red-700' : 'text-marca-700'}">
+         ${e.vencido ? '⚠ Vencido · ' : ''}Prestado a <strong>${esc(e.prestado_a)}</strong> desde ${fechaCorta(e.prestamo_desde)}${e.prestamo_hasta ? ` · devuelve ${fmtDia(e.prestamo_hasta)}` : ''}${e.prestamo_motivo ? ` · ${esc(e.prestamo_motivo)}` : ''}
+       </p>` : '';
+  const bloqueado = e.es_conjunto && e.estado === 'Disponible' && e.componentes_no_disponibles;
+  const conjunto = e.es_conjunto
+    ? `<p class="text-xs text-slate-600"><span class="mr-1 rounded bg-marca-50 px-1.5 py-0.5 font-medium text-marca-800 ring-1 ring-marca-200">Conjunto</span>${plural(e.componentes || 0, 'componente', 'componentes')}${valorConjunto(e) != null ? ` · valor total ${fmtMoneda(valorConjunto(e))}` : ''}</p>
+       ${bloqueado ? `<p class="mt-1 text-xs font-medium text-amber-800">No se puede prestar: ${esc(e.componentes_no_disponibles)}</p>` : ''}` : '';
+  const accion = e.estado === 'Disponible' && !bloqueado
+    ? `<button type="button" data-prestar="${e.id}" class="rounded-lg bg-marca-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-marca-600">Prestar</button>`
+    : e.estado === 'Prestado' && e.prestamo_id
+      ? `<button type="button" data-devolver="${e.id}" class="rounded-lg border border-marca-500 px-3 py-1.5 text-sm font-semibold text-marca-700 hover:bg-marca-50">Recibir</button>`
+      : '';
+  return `
+    <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${e.estado === 'De baja' ? 'opacity-60' : ''}">
+      ${miniatura(e.foto_path, 'h-12 w-12')}
+      <div class="min-w-0 flex-1 basis-48">
+        <p class="font-medium"><span class="mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${st.punto}"></span>${esc(e.nombre)}
+          <span class="ml-1 font-mono text-xs font-normal text-slate-500">${esc(e.codigo_serie)}</span></p>
+        ${codigosActivo(e) ? `<p class="truncate font-mono text-xs text-slate-600">${esc(codigosActivo(e))}</p>` : ''}
+        ${conjunto}
+        ${datos2 ? `<p class="truncate text-xs text-slate-500">${datos2}</p>` : ''}
+        ${prestamo}
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${st.badge}">${esc(e.estado)}</span>
+        ${accion}
+        <button type="button" data-editar-equipo="${e.id}" class="rounded-lg px-2.5 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
+      </div>
+    </li>`;
+}
+
+function filaComponente(c) {
+  const st = ESTILO_EQUIPO[c.estado] || ESTILO_EQUIPO['De baja'];
+  return `
+    <li class="flex flex-wrap items-center gap-x-3 gap-y-1 bg-slate-50/70 py-2 pl-8 pr-4 sm:pl-14 ${c.estado === 'De baja' ? 'opacity-60' : ''}">
+      <span class="text-slate-300" aria-hidden="true">└</span>
+      ${c.foto_path ? miniatura(c.foto_path, 'h-9 w-9') : ''}
+      <div class="min-w-0 flex-1 basis-40">
+        <p class="text-sm font-medium">${esc(c.nombre)} <span class="ml-1 font-mono text-xs font-normal text-slate-500">${esc(c.codigo_serie)}</span></p>
+        ${codigosActivo(c) ? `<p class="truncate font-mono text-[11px] text-slate-600">${esc(codigosActivo(c))}</p>` : ''}
+      </div>
+      <div class="flex shrink-0 items-center gap-2">
+        <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${st.badge}">${c.estado === 'Prestado' ? 'Prestado con el conjunto' : esc(c.estado)}</span>
+        <button type="button" data-editar-equipo="${c.id}" class="rounded-lg px-2.5 py-1 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
+      </div>
+    </li>`;
 }
 
 function renderVencidos() {
@@ -965,7 +1007,7 @@ const modalEtiquetas = $('#modal-etiquetas');
   m.addEventListener('click', (ev) => { if (ev.target === m) m.close(); });
 });
 const buscarEquipo = (id) => estado.equipos.find((e) => e.id === Number(id));
-const tarjetaEquipo = (e) => `<div class="flex items-center gap-3">${e.foto_path ? miniatura(e.foto_path, 'h-14 w-14') : ''}<div class="min-w-0"><p class="font-medium">${esc(e.nombre)}</p><p class="font-mono text-xs text-slate-500">${esc(e.codigo_serie)}${e.ubicacion ? ` · ${esc(e.ubicacion)}` : ''}</p>${codigosActivo(e) ? `<p class="font-mono text-xs text-slate-500">${esc(codigosActivo(e))}</p>` : ''}</div></div>`;
+const tarjetaEquipo = (e) => `<div class="flex items-center gap-3">${e.foto_path ? miniatura(e.foto_path, 'h-14 w-14') : ''}<div class="min-w-0"><p class="font-medium">${esc(e.nombre)}</p><p class="font-mono text-xs text-slate-500">${esc(e.codigo_serie)}${e.ubicacion ? ` · ${esc(e.ubicacion)}` : ''}</p>${codigosActivo(e) ? `<p class="font-mono text-xs text-slate-500">${esc(codigosActivo(e))}</p>` : ''}${e.es_conjunto ? `<p class="text-xs text-marca-800">Conjunto · ${plural(e.componentes || 0, 'componente', 'componentes')}</p>` : ''}</div></div>`;
 const fotoEquipo = controlFoto('e');
 
 function abrirEquipoForm(e = null) {
@@ -981,15 +1023,78 @@ function abrirEquipoForm(e = null) {
   $('#e-estado-prestado').classList.toggle('hidden', !prestado);
   $('#e-estado').value = prestado ? 'Disponible' : (e?.estado || 'Disponible');
   fotoEquipo.cargar(e?.foto_path);
+  prepararConjunto(e);
   modalEquipo.showModal();
   f.namedItem(e ? 'nombre' : 'codigo_serie').focus();
 }
+
+// Conjunto en el formulario: componentes elegidos (se aplican al guardar).
+const formConj = { original: [], elegidos: [], sacarDeConjunto: false, equipo: null };
+function prepararConjunto(e) {
+  formConj.equipo = e;
+  formConj.original = e ? componentesDe(e.id).map((c) => c.id) : [];
+  formConj.elegidos = [...formConj.original];
+  formConj.sacarDeConjunto = false;
+  $('#e-sacar-de-conjunto').textContent = 'Sacar del conjunto';
+  const esComponente = !!e?.conjunto_id;
+  $('#e-es-conjunto').checked = !!e?.es_conjunto;
+  $('#e-es-conjunto-fila').classList.toggle('hidden', esComponente);
+  $('#e-pertenece').classList.toggle('hidden', !esComponente);
+  $('#e-pertenece').classList.toggle('flex', esComponente);
+  if (esComponente) {
+    $('#e-sacar-de-conjunto').classList.toggle('hidden', e.estado === 'Prestado');
+    $('#e-pertenece').querySelector('p').innerHTML = `Forma parte del conjunto <strong>${esc(e.conjunto_nombre || '')}</strong>.`;
+  }
+  pintarComponentes();
+}
+function pintarComponentes() {
+  const e = formConj.equipo;
+  const activo = $('#e-es-conjunto').checked;
+  $('#e-componentes-bloque').classList.toggle('hidden', !activo);
+  if (!activo) return;
+  const prestado = e?.estado === 'Prestado';
+  $('#e-componentes').innerHTML = formConj.elegidos.length
+    ? formConj.elegidos.map((id) => {
+        const c = buscarEquipo(id);
+        return `<li class="flex items-center gap-2 px-3 py-2"><div class="min-w-0 flex-1"><p class="truncate">${esc(c.nombre)} <span class="font-mono text-xs text-slate-500">${esc(c.codigo_serie)}</span></p>${codigosActivo(c) ? `<p class="truncate font-mono text-[11px] text-slate-500">${esc(codigosActivo(c))}</p>` : ''}</div>
+          ${prestado ? '' : `<button type="button" data-quitar-componente="${id}" class="shrink-0 rounded px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50">Quitar</button>`}</li>`;
+      }).join('')
+    : '<li class="px-3 py-3 text-center text-xs text-slate-500">Todavía no tiene componentes. Agregalos con la lista de abajo.</li>';
+  const libres = estado.equipos.filter((x) => !x.es_conjunto && !x.conjunto_id && x.id !== e?.id && x.estado !== 'De baja' && !formConj.elegidos.includes(x.id))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const sel = $('#e-agregar-componente');
+  sel.disabled = prestado;
+  sel.innerHTML = `<option value="">${prestado ? 'Prestado: se cambia cuando vuelva' : libres.length ? '+ Agregar componente…' : 'No hay equipos libres para agregar'}</option>` +
+    libres.map((x) => `<option value="${x.id}">${esc(x.nombre)} · ${esc(x.codigo_serie)}${x.activo_fijo_utec ? ` · AF UTEC ${esc(x.activo_fijo_utec)}` : ''}</option>`).join('');
+}
+$('#e-es-conjunto').addEventListener('change', pintarComponentes);
+$('#e-agregar-componente').addEventListener('change', (ev) => {
+  const id = Number(ev.target.value);
+  if (id) { formConj.elegidos.push(id); pintarComponentes(); }
+});
+$('#e-componentes').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-quitar-componente]');
+  if (!b) return;
+  formConj.elegidos = formConj.elegidos.filter((id) => id !== Number(b.dataset.quitarComponente));
+  pintarComponentes();
+});
+$('#e-sacar-de-conjunto').addEventListener('click', () => {
+  formConj.sacarDeConjunto = !formConj.sacarDeConjunto;
+  $('#e-sacar-de-conjunto').textContent = formConj.sacarDeConjunto ? 'Deshacer' : 'Sacar del conjunto';
+  $('#e-pertenece').querySelector('p').innerHTML = formConj.sacarDeConjunto
+    ? 'Se va a sacar del conjunto al guardar.'
+    : `Forma parte del conjunto <strong>${esc(formConj.equipo?.conjunto_nombre || '')}</strong>.`;
+});
 
 function abrirPrestamo(e) {
   formPrestamo.reset();
   mostrarError($('#pr-error'), '');
   formPrestamo.dataset.equipo = e.id;
   $('#pr-equipo').innerHTML = tarjetaEquipo(e);
+  const partes = e.es_conjunto ? componentesDe(e.id) : [];
+  $('#pr-componentes').classList.toggle('hidden', !partes.length);
+  $('#pr-componentes').innerHTML = partes.length
+    ? `<p class="mb-1 text-xs font-semibold text-marca-900">Se prestan juntos (${partes.length}):</p><ul class="space-y-0.5 text-xs text-slate-700">${partes.map((c) => `<li>• ${esc(c.nombre)} <span class="font-mono text-slate-500">${esc(c.codigo_serie)}</span></li>`).join('')}</ul>` : '';
   $('#pr-fecha').value = sumarDias(0);
   $('#pr-fecha').min = sumarDias(0);
   modalPrestamo.showModal();
@@ -1003,6 +1108,16 @@ function abrirDevolucion(e) {
   $('#dv-resumen').innerHTML = `${tarjetaEquipo(e)}
     <p class="mt-1.5 text-sm">Prestado a <strong>${esc(e.prestado_a)}</strong> el ${fechaCorta(e.prestamo_desde)}${e.prestamo_contacto ? ` · ${esc(e.prestamo_contacto)}` : ''}</p>
     ${e.prestamo_hasta ? `<p class="text-xs ${e.vencido ? 'font-semibold text-red-700' : 'text-slate-500'}">Debía volver el ${fmtDia(e.prestamo_hasta)}${e.vencido ? ' (vencido)' : ''}</p>` : ''}`;
+  const partes = e.es_conjunto ? [e, ...componentesDe(e.id).filter((c) => c.estado === 'Prestado')] : [];
+  $('#dv-checklist').classList.toggle('hidden', !partes.length);
+  $('#dv-condicion').classList.toggle('hidden', !!partes.length);
+  formDevolucion.dataset.conjunto = partes.length ? '1' : '';
+  $('#dv-partes').innerHTML = partes.map((c, i) => `
+    <li><label class="flex cursor-pointer items-center gap-3 px-3 py-2">
+      <input type="checkbox" name="parte_ok" value="${c.id}" checked class="h-4 w-4 accent-emerald-600" />
+      <span class="min-w-0 flex-1 text-sm">${esc(c.nombre)}${i === 0 ? ' <span class="text-xs text-slate-500">(el conjunto: estructura, soporte, cables)</span>' : ''}
+        <span class="block font-mono text-[11px] text-slate-500">${esc(c.codigo_serie)}${codigosActivo(c) ? ' · ' + esc(codigosActivo(c)) : ''}</span></span>
+    </label></li>`).join('');
   $('#dv-nueva-fecha').value = sumarDias(1);
   $('#dv-nueva-fecha').min = sumarDias(0);
   modalDevolucion.showModal();
@@ -1014,9 +1129,19 @@ function abrirEquipoPendiente() {
   const e = buscarEquipo(equipoPendiente);
   equipoPendiente = null;
   if (!e) return toast('No se encontró el equipo de esa etiqueta.');
+  if (e.conjunto_id && buscarEquipo(e.conjunto_id)) {
+    toast(`${e.nombre} es parte de ${e.conjunto_nombre}: se presta y se recibe con el conjunto.`);
+    return abrirEquipoPendienteDe(buscarEquipo(e.conjunto_id));
+  }
+  abrirEquipoPendienteDe(e);
+}
+function abrirEquipoPendienteDe(e) {
   $('#eq-texto').value = e.codigo_serie;
   renderEquipos();
-  if (e.estado === 'Disponible') abrirPrestamo(e);
+  if (e.estado === 'Disponible' && e.es_conjunto && e.componentes_no_disponibles) {
+    toast(`No se puede prestar ${e.nombre}: ${e.componentes_no_disponibles}.`);
+    abrirEquipoForm(e);
+  } else if (e.estado === 'Disponible') abrirPrestamo(e);
   else if (e.estado === 'Prestado' && e.prestamo_id) abrirDevolucion(e);
   else abrirEquipoForm(e);
 }
@@ -1056,8 +1181,16 @@ formEquipo.addEventListener('submit', (ev) => {
   if (!campos.codigo_serie) return mostrarError($('#e-error'), 'El número de serie es obligatorio.');
   if (!campos.nombre) return mostrarError($('#e-error'), 'El nombre es obligatorio.');
   if (campos.valor_compra !== null && !(campos.valor_compra >= 0)) return mostrarError($('#e-error'), 'El valor debe ser un número mayor o igual a 0.');
+  const esConjunto = $('#e-es-conjunto').checked && !actual?.conjunto_id;
+  const agregar = esConjunto ? formConj.elegidos.filter((x) => !formConj.original.includes(x)) : [];
+  const quitar = formConj.original.filter((x) => !esConjunto || !formConj.elegidos.includes(x));
+  if (!actual?.conjunto_id) campos.es_conjunto = esConjunto;
+  if (formConj.sacarDeConjunto) campos.conjunto_id = null;
   enviar(formEquipo, $('#e-error'), async () => {
+    // Primero se sueltan los componentes (por si deja de ser conjunto), después se guarda y se agregan los nuevos.
+    for (const c of quitar) await datos.guardarEquipo(c, { conjunto_id: null });
     const idGuardado = await datos.guardarEquipo(id ? Number(id) : null, campos);
+    for (const c of agregar) await datos.guardarEquipo(c, { conjunto_id: idGuardado });
     const avisoFoto = await guardarFoto(fotoEquipo, 'equipos', idGuardado, (x, c) => datos.guardarEquipo(x, c));
     modalEquipo.close();
     toast((id ? 'Equipo actualizado.' : 'Equipo dado de alta.') + avisoFoto);
@@ -1089,14 +1222,21 @@ formPrestamo.addEventListener('submit', (ev) => {
 formDevolucion.addEventListener('submit', (ev) => {
   ev.preventDefault();
   const f = Object.fromEntries(new FormData(formDevolucion));
+  const conjunto = !!formDevolucion.dataset.conjunto;
+  const novedad = conjunto ? $$('#dv-partes [name=parte_ok]').filter((x) => !x.checked).map((x) => Number(x.value)) : [];
+  if (novedad.length && !f.observaciones_devolucion.trim()) return mostrarError($('#dv-error'), 'Contá en Observaciones qué pasó con lo que desmarcaste.');
+  const condicion = conjunto ? (novedad.length ? 'Con daño' : 'Bien') : f.condicion_devolucion || 'Bien';
   enviar(formDevolucion, $('#dv-error'), async () => {
     await datos.actualizarPrestamo(Number(formDevolucion.dataset.prestamo), {
       estado: 'Devuelto',
-      condicion_devolucion: f.condicion_devolucion || 'Bien',
+      condicion_devolucion: condicion,
       observaciones_devolucion: f.observaciones_devolucion.trim() || null,
+      ...(conjunto ? { componentes_con_novedad: novedad.length ? novedad : null } : {}),
     });
     modalDevolucion.close();
-    toast(f.condicion_devolucion === 'Con daño' ? 'Devolución registrada: el equipo pasó a mantenimiento.' : 'Devolución registrada: el equipo quedó disponible.');
+    toast(conjunto
+      ? (novedad.length ? `Devolución registrada: ${novedad.map((x) => buscarEquipo(x)?.nombre).join(', ')} pasó a mantenimiento; el resto quedó disponible.` : 'Devolución registrada: todo el conjunto quedó disponible.')
+      : condicion === 'Con daño' ? 'Devolución registrada: el equipo pasó a mantenimiento.' : 'Devolución registrada: el equipo quedó disponible.');
     await cargarDatos();
   });
 });
@@ -1125,6 +1265,8 @@ function etiquetaHTML(e, tam) {
     <p class="font-mono text-xs">${esc(e.codigo_serie)}</p>
     ${e.activo_fijo_utec ? `<p class="font-mono text-[11px]">AF UTEC ${esc(e.activo_fijo_utec)}</p>` : ''}
     ${e.activo_fijo_n ? `<p class="font-mono text-[11px]">AF N ${esc(e.activo_fijo_n)}</p>` : ''}
+    ${e.es_conjunto ? `<p class="text-[11px] font-semibold">Conjunto · ${plural(e.componentes || 0, 'componente', 'componentes')}</p>` : ''}
+    ${e.conjunto_id ? `<p class="text-[11px]">Parte de: ${esc(e.conjunto_nombre || '')}</p>` : ''}
     <p class="text-[10px] text-slate-500">Laboratorio · Control de Insumos</p>
   </div>`;
 }
@@ -1209,10 +1351,12 @@ function renderUsuarios() {
 // ---------- Historial ----------
 const ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', categoria: 'Categoría', stock_actual: 'Stock',
   stock_minimo: 'Mínimo', unidad_medida: 'Unidad', proveedor: 'Proveedor', ultimo_precio: 'Últ. precio', fecha_ultimo_precio: 'Fecha precio',
-  codigo_serie: 'N.º de serie', activo_fijo_utec: 'Activo fijo UTEC', activo_fijo_n: 'Activo fijo N', marca_modelo: 'Marca/modelo', ubicacion: 'Ubicación', estado: 'Estado',
+  codigo_serie: 'N.º de serie', activo_fijo_utec: 'Activo fijo UTEC', activo_fijo_n: 'Activo fijo N', es_conjunto: 'Es conjunto', conjunto_id: 'Conjunto', marca_modelo: 'Marca/modelo', ubicacion: 'Ubicación', estado: 'Estado',
   fecha_adquisicion: 'Fecha compra', valor_compra: 'Valor', observaciones: 'Observaciones' };
 
 function valorLegible(campo, v) {
+  if (campo === 'es_conjunto') return v ? 'Sí' : 'No';
+  if (campo === 'conjunto_id') return v == null ? '—' : (buscarEquipo(v)?.nombre || `#${v}`);
   if (v == null || v === '') return '—';
   if (campo === 'ultimo_precio' || campo === 'valor_compra') return fmtMoneda(Number(v));
   if (campo === 'stock_actual' || campo === 'stock_minimo') return fmtNum.format(Number(v));
@@ -1902,10 +2046,11 @@ $('#btn-excel').addEventListener('click', async (ev) => {
       { 3: NUM, 4: NUM, 8: PESOS, 9: FECHA, 10: PESOS }, [12, 30, 16, 10, 10, 10, 12, 20, 14, 12, 14]), 'Stock actual');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones'],
+      ['N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones', 'Tipo', 'Conjunto'],
       estado.equipos.map((e) => [e.codigo_serie, e.activo_fijo_utec || '', e.activo_fijo_n || '', e.nombre, e.categoria, e.marca_modelo || '', e.ubicacion || '', e.estado, e.prestado_a || '',
-        serialExcel(e.prestamo_hasta), serialExcel(e.fecha_adquisicion), e.valor_compra, e.observaciones || '']),
-      { 9: FECHA, 10: FECHA, 11: PESOS }, [14, 16, 14, 26, 14, 20, 16, 14, 20, 12, 12, 14, 30]), 'Equipos');
+        serialExcel(e.prestamo_hasta), serialExcel(e.fecha_adquisicion), e.valor_compra, e.observaciones || '',
+        e.es_conjunto ? `Conjunto (${e.componentes || 0} componentes)` : e.conjunto_id ? 'Componente' : 'Equipo', e.conjunto_nombre || '']),
+      { 9: FECHA, 10: FECHA, 11: PESOS }, [14, 16, 14, 26, 14, 20, 16, 14, 20, 12, 12, 14, 30, 22, 24]), 'Equipos');
 
     XLSX.writeFile(libro, `reporte-insumos_${rep.desde}_a_${rep.hasta}.xlsx`, { compression: true });
     toast('Excel descargado.');

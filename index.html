@@ -628,11 +628,11 @@
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="mb-1 block text-sm font-medium" for="e-af-utec">Activo fijo UTEC</label>
-          <input id="e-af-utec" name="activo_fijo_utec" type="text" maxlength="40" autocapitalize="characters" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 font-mono uppercase" />
+          <input id="e-af-utec" name="activo_fijo_utec" type="text" maxlength="40" autocapitalize="characters" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 font-mono uppercase placeholder:font-sans placeholder:normal-case" />
         </div>
         <div>
           <label class="mb-1 block text-sm font-medium" for="e-af-n">Activo fijo N</label>
-          <input id="e-af-n" name="activo_fijo_n" type="text" maxlength="40" autocapitalize="characters" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 font-mono uppercase" />
+          <input id="e-af-n" name="activo_fijo_n" type="text" maxlength="40" autocapitalize="characters" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 font-mono uppercase placeholder:font-sans placeholder:normal-case" />
         </div>
       </div>
       <div class="grid grid-cols-2 gap-3">
@@ -662,6 +662,24 @@
           <p id="e-estado-prestado" class="hidden py-2.5 text-sm text-marca-700">Prestado (se cambia al registrar la devolución)</p>
         </div>
       </div>
+      <fieldset id="e-conjunto" class="rounded-lg border border-slate-200 p-3">
+        <legend class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Conjunto</legend>
+        <label id="e-es-conjunto-fila" class="flex cursor-pointer items-start gap-2.5">
+          <input id="e-es-conjunto" type="checkbox" class="mt-0.5 h-4 w-4 shrink-0 accent-[#00a9e0]" />
+          <span class="text-sm"><span class="font-medium">Es un conjunto</span>
+            <span class="block text-xs text-slate-500">Agrupa otros equipos que se prestan juntos (ej.: pórtico RF = lector + 4 antenas).</span></span>
+        </label>
+        <div id="e-componentes-bloque" class="mt-3 hidden">
+          <p class="mb-1 text-sm font-medium">Componentes</p>
+          <ul id="e-componentes" class="divide-y divide-slate-100 rounded-lg border border-slate-200 text-sm"></ul>
+          <select id="e-agregar-componente" aria-label="Agregar componente" class="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 bg-white"></select>
+          <p id="e-componentes-nota" class="mt-1 text-xs text-slate-500">Solo aparecen equipos que no forman parte de otro conjunto. Los cambios se aplican al guardar.</p>
+        </div>
+        <div id="e-pertenece" class="hidden items-center justify-between gap-3 text-sm">
+          <p>Forma parte del conjunto <strong id="e-pertenece-nombre"></strong>.</p>
+          <button type="button" id="e-sacar-de-conjunto" class="shrink-0 rounded-lg px-2.5 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">Sacar del conjunto</button>
+        </div>
+      </fieldset>
       <fieldset class="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 p-3">
         <legend class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Activo</legend>
         <div>
@@ -714,6 +732,7 @@
         </button>
       </div>
       <div id="pr-equipo" class="rounded-lg bg-slate-50 px-3 py-2.5 text-sm"></div>
+      <div id="pr-componentes" class="hidden rounded-lg border border-marca-200 bg-marca-50 px-3 py-2.5 text-sm"></div>
       <div>
         <label class="mb-1 block text-sm font-medium" for="pr-responsable">Quién lo retira</label>
         <input id="pr-responsable" name="usuario_responsable" type="text" required maxlength="80" placeholder="Nombre y apellido" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
@@ -751,7 +770,12 @@
         </button>
       </div>
       <div id="dv-resumen" class="rounded-lg bg-slate-50 px-3 py-2.5 text-sm"></div>
-      <div>
+      <div id="dv-checklist" class="hidden">
+        <p class="text-sm font-medium">¿Volvió todo bien?</p>
+        <p class="mb-1.5 text-xs text-slate-500">Desmarcá lo que volvió con daño o no volvió: eso pasa a <strong>En mantenimiento</strong> y el resto queda disponible.</p>
+        <ul id="dv-partes" class="divide-y divide-slate-100 rounded-lg border border-slate-200"></ul>
+      </div>
+      <div id="dv-condicion">
         <p class="mb-1.5 text-sm font-medium">¿Cómo vuelve el equipo?</p>
         <div class="grid grid-cols-2 gap-2">
           <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 px-3 py-2.5 has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50">
