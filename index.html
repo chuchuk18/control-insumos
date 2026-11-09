@@ -126,6 +126,15 @@
           <ul id="lista-vencidos" class="divide-y divide-slate-100"></ul>
         </div>
 
+        <div id="alertas-quiebre" class="hidden rounded-xl border border-red-200 bg-white">
+          <div class="flex items-center gap-2 border-b border-red-100 px-4 py-3">
+            <svg class="h-5 w-5 text-red-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8M21 7v5m0-5h-5"/></svg>
+            <h2 class="text-sm font-semibold">Riesgo de quiebre de stock</h2>
+            <span class="ml-auto hidden text-xs text-slate-500 sm:inline">según consumo promedio y demora del proveedor</span>
+          </div>
+          <ul id="lista-quiebre" class="divide-y divide-slate-100"></ul>
+        </div>
+
         <div id="alertas" class="hidden rounded-xl border border-amber-200 bg-white">
           <div class="flex items-center gap-2 border-b border-amber-100 px-4 py-3">
             <svg class="h-5 w-5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
@@ -174,7 +183,27 @@
             </div>
           </div>
 
-          <div>
+          <div id="c-rollo-bloque" class="hidden space-y-3 rounded-lg border border-marca-200 bg-marca-50/50 p-3">
+            <div>
+              <label for="c-rollo" class="mb-1 block text-sm font-medium">Rollo</label>
+              <select id="c-rollo" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500"></select>
+              <p id="c-rollo-info" class="mt-1 text-xs text-slate-600"></p>
+            </div>
+            <div>
+              <label for="c-peso" class="mb-1 block text-sm font-medium">Peso del rollo después de la práctica</label>
+              <div class="flex">
+                <input id="c-peso" type="number" inputmode="decimal" min="0" step="0.001" placeholder="0,000" class="w-full rounded-l-lg border border-slate-300 bg-white px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+                <span class="inline-flex min-w-[3rem] items-center justify-center rounded-r-lg border border-l-0 border-slate-300 bg-slate-50 px-3 text-sm text-slate-500">kg</span>
+              </div>
+            </div>
+            <label class="flex cursor-pointer items-start gap-2.5 text-sm">
+              <input id="c-cerrar" type="checkbox" class="mt-0.5 h-4 w-4 shrink-0 accent-[#00a9e0]" />
+              <span>El rollo se terminó o se descarta <span class="block text-xs text-slate-500">Lo que quede se da por usado y el rollo sale del stock.</span></span>
+            </label>
+            <p id="c-calculo" class="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200">Pesá el rollo y cargá el peso.</p>
+          </div>
+
+          <div id="c-cantidad-bloque">
             <label for="c-cantidad" class="mb-1 block text-sm font-medium">Cantidad a retirar</label>
             <div class="flex">
               <input id="c-cantidad" name="cantidad_retirada" type="number" inputmode="decimal" min="0" step="any" required
@@ -302,6 +331,7 @@
               <option value="devolucion">Devoluciones de equipos</option>
               <option value="edicion">Modificaciones</option>
               <option value="ajuste">Solo ajustes de stock</option>
+              <option value="entrada">Entradas de rollos</option>
               <option value="alta">Altas</option>
             </select>
             <select id="h-usuario" class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-marca-500 focus:outline-none">
@@ -557,6 +587,66 @@
         </div>
       </div>
       <p id="i-aviso-stock" class="hidden text-xs text-slate-500">Modificar el stock actual aquí es un ajuste manual (no queda registrado como consumo).</p>
+      <p id="i-stock-rollos" class="hidden text-xs text-marca-800">El stock se calcula sumando los rollos: se carga al <strong>recibir rollos</strong> y baja al registrar consumos.</p>
+
+      <fieldset class="space-y-3 rounded-lg border border-slate-200 p-3">
+        <legend class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Alarma de quiebre</legend>
+        <div>
+          <label class="mb-1 block text-sm font-medium" for="i-consumo-semanal">Consumo promedio por semana</label>
+          <div class="flex"><input id="i-consumo-semanal" name="consumo_semanal_manual" type="number" inputmode="decimal" min="0" step="any" placeholder="Ej: 1,5" class="w-full min-w-0 rounded-l-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" /><span id="i-consumo-unidad" class="inline-flex min-w-[4rem] items-center justify-center rounded-r-lg border border-l-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">—</span></div>
+        </div>
+        <div role="radiogroup" aria-label="Promedio a usar" class="grid grid-cols-2 gap-2 text-sm">
+          <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-slate-200 p-2 has-[:checked]:border-marca-500 has-[:checked]:bg-marca-50">
+            <input type="radio" name="fuente_promedio" value="manual" class="mt-0.5 accent-[#00a9e0]" checked />
+            <span><span class="font-medium">Manual</span><span class="block text-xs text-slate-500">El valor de arriba</span></span>
+          </label>
+          <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-slate-200 p-2 has-[:checked]:border-marca-500 has-[:checked]:bg-marca-50">
+            <input type="radio" name="fuente_promedio" value="calculado" class="mt-0.5 accent-[#00a9e0]" />
+            <span><span class="font-medium">Calculado</span><span id="i-promedio-calculado" class="block text-xs text-slate-500">Últimas 8 semanas</span></span>
+          </label>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="mb-1 block text-sm font-medium" for="i-plazo">Demora del proveedor</label>
+            <div class="flex"><input id="i-plazo" name="plazo_reposicion_dias" type="number" inputmode="numeric" min="0" max="365" step="1" value="7" class="w-full min-w-0 rounded-l-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" /><span class="inline-flex items-center rounded-r-lg border border-l-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">días</span></div>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium" for="i-seguridad">Margen de seguridad</label>
+            <div class="flex"><input id="i-seguridad" name="dias_seguridad" type="number" inputmode="numeric" min="0" max="365" step="1" value="3" class="w-full min-w-0 rounded-l-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" /><span class="inline-flex items-center rounded-r-lg border border-l-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">días</span></div>
+          </div>
+        </div>
+        <p id="i-alarma-calculo" class="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600"></p>
+      </fieldset>
+
+      <fieldset class="rounded-lg border border-slate-200 p-3">
+        <legend class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Rollos</legend>
+        <label class="flex cursor-pointer items-start gap-2.5">
+          <input id="i-por-rollo" name="control_por_rollo" type="checkbox" class="mt-0.5 h-4 w-4 shrink-0 accent-[#00a9e0]" />
+          <span class="text-sm"><span class="font-medium">Controlar por rollo</span>
+            <span class="block text-xs text-slate-500">Cada rollo lleva su etiqueta QR y el consumo se calcula pesando el rollo después de la práctica (film, cintas).</span></span>
+        </label>
+        <div id="i-rollo-campos" class="mt-3 hidden space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="mb-1 block text-sm font-medium" for="i-bruto">Peso bruto rollo nuevo</label>
+              <div class="flex"><input id="i-bruto" name="peso_bruto_rollo_kg" type="number" inputmode="decimal" min="0" step="0.001" placeholder="0,000" class="w-full min-w-0 rounded-l-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" /><span class="inline-flex items-center rounded-r-lg border border-l-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">kg</span></div>
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium" for="i-tara">Peso del cono vacío</label>
+              <div class="flex"><input id="i-tara" name="tara_kg" type="number" inputmode="decimal" min="0" step="0.001" placeholder="0,000" class="w-full min-w-0 rounded-l-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" /><span class="inline-flex items-center rounded-r-lg border border-l-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">kg</span></div>
+            </div>
+          </div>
+          <div id="i-contenido-fila">
+            <label class="mb-1 block text-sm font-medium" for="i-contenido">Referencia por rollo <span class="font-normal text-slate-500">(opcional)</span></label>
+            <div class="flex gap-2">
+              <input id="i-contenido" name="contenido_por_rollo" type="number" inputmode="decimal" min="0" step="any" placeholder="Ej: 100" class="w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+              <input id="i-unidad-ref" name="unidad_referencia" type="text" maxlength="12" placeholder="m" aria-label="Unidad de referencia" class="w-20 shrink-0 rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+            </div>
+            <p class="mt-1 text-xs text-slate-500">Solo para mostrar equivalencias (≈ metros, ≈ rollos). El control se lleva en kg, lo que marca la balanza.</p>
+          </div>
+          <p id="i-rollo-calculo" class="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600"></p>
+        </div>
+      </fieldset>
 
       <fieldset class="space-y-3 rounded-lg border border-slate-200 p-3">
         <legend class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Compra</legend>
@@ -809,15 +899,64 @@
   </dialog>
 
   <!-- ============ MODAL ETIQUETAS QR ============ -->
-  <dialog id="modal-etiquetas" class="max-h-[calc(100dvh-2rem)] w-[min(48rem,calc(100vw-2rem))] overflow-y-auto rounded-xl p-0 shadow-xl">
+  <dialog id="modal-rollos" class="max-h-[calc(100dvh-2rem)] w-[min(40rem,calc(100vw-2rem))] overflow-y-auto rounded-xl p-0 shadow-xl">
     <div class="space-y-4 p-5">
-      <div class="flex items-center justify-between">
-        <h3 class="text-base font-semibold">Etiquetas QR de equipos</h3>
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h3 id="ro-titulo" class="text-base font-semibold">Rollos</h3>
+          <p id="ro-resumen" class="text-sm text-slate-600"></p>
+        </div>
         <button type="button" data-cerrar class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Cerrar">
           <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
-      <p class="text-sm text-slate-600">Pegá cada etiqueta en su equipo. Al escanearla con el celular se abre la app directo para <strong>prestarlo o recibirlo</strong>. Se imprimen los equipos que estén filtrados en la lista.</p>
+
+      <form id="form-rollos" class="space-y-3 rounded-lg border border-slate-200 p-3" novalidate>
+        <p class="text-sm font-semibold">Recibir rollos</p>
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="ro-cantidad">Cantidad</label>
+            <input id="ro-cantidad" type="number" inputmode="numeric" min="1" max="50" step="1" value="1" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="ro-peso">Peso bruto c/u (kg)</label>
+            <input id="ro-peso" type="number" inputmode="decimal" min="0" step="0.001" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="ro-precio">Precio c/u ($)</label>
+            <input id="ro-precio" type="number" inputmode="decimal" min="0" step="any" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+          </div>
+        </div>
+        <p id="ro-calculo" class="text-xs text-slate-500"></p>
+        <p id="ro-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+        <button type="submit" class="w-full rounded-lg bg-marca-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-marca-600 disabled:opacity-60">Registrar entrada</button>
+      </form>
+
+      <div>
+        <div class="mb-2 flex items-center justify-between gap-2">
+          <p class="text-sm font-semibold">Rollos</p>
+          <div class="flex items-center gap-2">
+            <label class="flex items-center gap-1.5 text-xs text-slate-600"><input id="ro-ver-terminados" type="checkbox" class="h-3.5 w-3.5" /> Ver terminados</label>
+            <button id="ro-etiquetas" type="button" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/></svg>
+              Etiquetas QR
+            </button>
+          </div>
+        </div>
+        <ul id="ro-lista" class="divide-y divide-slate-100 rounded-lg border border-slate-200"></ul>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="modal-etiquetas" class="max-h-[calc(100dvh-2rem)] w-[min(48rem,calc(100vw-2rem))] overflow-y-auto rounded-xl p-0 shadow-xl">
+    <div class="space-y-4 p-5">
+      <div class="flex items-center justify-between">
+        <h3 id="et-titulo" class="text-base font-semibold">Etiquetas QR de equipos</h3>
+        <button type="button" data-cerrar class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Cerrar">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <p id="et-texto" class="text-sm text-slate-600">Pegá cada etiqueta en su equipo. Al escanearla con el celular se abre la app directo para <strong>prestarlo o recibirlo</strong>. Se imprimen los equipos que estén filtrados en la lista.</p>
       <div id="vista-etiquetas" class="grid grid-cols-2 gap-3 sm:grid-cols-3"></div>
       <div class="flex justify-end gap-2">
         <button type="button" data-cerrar class="rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Cerrar</button>

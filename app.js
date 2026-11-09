@@ -6,6 +6,8 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const fmtNum = new Intl.NumberFormat('es-UY', { maximumFractionDigits: 3 });
+const fmtKgN = new Intl.NumberFormat('es-UY', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+const fmtKg = (v) => fmtKgN.format(v || 0);
 const fmtPrecio = new Intl.NumberFormat('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtMoneda = (n) => (n == null ? '—' : `$ ${fmtPrecio.format(n)}`);
 const fmtDia = (iso) => (iso ? iso.split('-').reverse().join('/') : '');   // 2026-10-27 → 27/10/2026
@@ -40,6 +42,20 @@ function traducirError(error) {
   if (msg.includes('FALTA_RESPONSABLE')) return new Error('Indicá quién retira el equipo.');
   if (msg.includes('ESTADO_PRESTADO_MANUAL')) return new Error('El estado "Prestado" se maneja con préstamos y devoluciones.');
   const det = (codigo) => (msg.match(new RegExp(codigo + ':([^\\n]+)')) || [])[1]?.trim();
+  const kg = (codigo) => { const v = Number(det(codigo)); return Number.isFinite(v) ? `${fmtKg(v)} kg` : ''; };
+  if (msg.includes('ROLLO_EN_KG')) return new Error('Los insumos que se controlan por rollo se llevan en kg (lo que mide la balanza).');
+  if (msg.includes('STOCK_POR_ROLLOS')) return new Error('El stock de este insumo se calcula con sus rollos: registrá una entrada de rollos o un consumo.');
+  if (msg.includes('FALTA_ROLLO')) return new Error('Este insumo se controla por rollo: elegí el rollo y cargá el peso.');
+  if (msg.includes('ROLLO_TERMINADO')) return new Error('Ese rollo ya está terminado.');
+  if (msg.includes('ROLLO_INVALIDO')) return new Error('El rollo elegido no corresponde a este insumo.');
+  if (msg.includes('FALTA_PESO_BRUTO')) return new Error('Cargá en el insumo el peso bruto del rollo nuevo.');
+  if (msg.includes('FALTA_PESO')) return new Error('Cargá el peso del rollo después de la práctica.');
+  if (msg.includes('PESO_MAYOR')) return new Error(`El peso no puede ser mayor al último registrado del rollo (${kg('PESO_MAYOR')}). Revisá la balanza o el rollo elegido.`);
+  if (msg.includes('PESO_MENOR_TARA')) return new Error(`El peso es menor que el del cono vacío (${kg('PESO_MENOR_TARA')}). Si el rollo se terminó, marcá "El rollo se terminó".`);
+  if (msg.includes('SIN_CONSUMO')) return new Error('El peso es igual al anterior: no hubo consumo para registrar.');
+  if (msg.includes('INSUMO_SIN_ROLLOS')) return new Error('Activá "Controlar por rollo" en el insumo antes de recibir rollos.');
+  if (msg.includes('FALTA_TARA')) return new Error('Cargá en el insumo el peso del cono vacío.');
+  if (msg.includes('PESO_ROLLO_INVALIDO')) return new Error('El peso del rollo tiene que ser mayor que el del cono vacío.');
   if (msg.includes('COMPONENTE_DE_CONJUNTO')) return new Error(`Este equipo forma parte del conjunto "${det('COMPONENTE_DE_CONJUNTO') || ''}": se presta junto con el conjunto.`);
   if (msg.includes('COMPONENTES_NO_DISPONIBLES')) return new Error(`No se puede prestar el conjunto porque hay partes que no están disponibles: ${det('COMPONENTES_NO_DISPONIBLES') || ''}. Sacalas del conjunto o esperá a que estén disponibles.`);
   if (msg.includes('COMPONENTE_PRESTADO')) return new Error('Ese componente está prestado con su conjunto: se puede cambiar cuando vuelva.');
@@ -64,6 +80,24 @@ const normalizarInsumo = (i) => ({
   stock_minimo: aNumero(i.stock_minimo),
   ultimo_precio: aNumero(i.ultimo_precio),
   valor_stock: aNumero(i.valor_stock),
+  tara_kg: aNumero(i.tara_kg),
+  peso_bruto_rollo_kg: aNumero(i.peso_bruto_rollo_kg),
+  contenido_por_rollo: aNumero(i.contenido_por_rollo),
+  consumo_semanal_manual: aNumero(i.consumo_semanal_manual),
+  consumo_semanal_calculado: aNumero(i.consumo_semanal_calculado),
+  consumo_semanal: aNumero(i.consumo_semanal),
+  dias_cobertura: aNumero(i.dias_cobertura),
+  punto_pedido: aNumero(i.punto_pedido),
+});
+const normalizarRollo = (r) => ({
+  ...r,
+  peso_inicial_kg: aNumero(r.peso_inicial_kg),
+  peso_actual_kg: aNumero(r.peso_actual_kg),
+  tara_kg: aNumero(r.tara_kg),
+  factor: aNumero(r.factor),
+  precio: aNumero(r.precio),
+  saldo: aNumero(r.saldo),
+  contenido_inicial: aNumero(r.contenido_inicial),
 });
 
 const datos = {
@@ -96,6 +130,16 @@ const datos = {
     const { data, error } = await sb.from('insumos').insert(campos).select('id').single();
     if (error) throw traducirError(error);
     return data.id;
+  },
+  async rollos() {
+    const { data, error } = await sb.from('v_rollos').select('*').order('recibido_en').order('id');
+    if (error) throw traducirError(error);
+    return data.map(normalizarRollo);
+  },
+  async recibirRollos(filas) {
+    const { data, error } = await sb.from('rollos').insert(filas).select('id');
+    if (error) throw traducirError(error);
+    return data.map((x) => x.id);
   },
   async registrarConsumo(mov) {
     const { error } = await sb.from('movimientos_insumos').insert(mov);
@@ -308,10 +352,30 @@ function prepararInsumo(f) {
     fecha_ultimo_precio: txt(f.fecha_ultimo_precio) || null,
   };
   if (!campos.nombre) throw new Error('El nombre es obligatorio.');
-  if (!(campos.stock_actual >= 0)) throw new Error('El stock actual debe ser un número mayor o igual a 0.');
+  if (f.control_por_rollo !== 'on' && !(campos.stock_actual >= 0)) throw new Error('El stock actual debe ser un número mayor o igual a 0.');
   if (!(campos.stock_minimo >= 0)) throw new Error('El stock mínimo debe ser un número mayor o igual a 0.');
   if (campos.ultimo_precio !== null && !(campos.ultimo_precio >= 0)) throw new Error('El precio debe ser un número mayor o igual a 0.');
   if (campos.ultimo_precio !== null && !campos.fecha_ultimo_precio) campos.fecha_ultimo_precio = hoyISO();
+  campos.consumo_semanal_manual = txt(f.consumo_semanal_manual) === '' ? null : num(f.consumo_semanal_manual);
+  campos.fuente_promedio = f.fuente_promedio === 'calculado' ? 'calculado' : 'manual';
+  campos.plazo_reposicion_dias = txt(f.plazo_reposicion_dias) === '' ? 7 : num(f.plazo_reposicion_dias);
+  campos.dias_seguridad = txt(f.dias_seguridad) === '' ? 0 : num(f.dias_seguridad);
+  if (campos.consumo_semanal_manual !== null && !(campos.consumo_semanal_manual >= 0)) throw new Error('El consumo promedio debe ser un número mayor o igual a 0.');
+  if (!(Number.isInteger(campos.plazo_reposicion_dias) && campos.plazo_reposicion_dias >= 0 && campos.plazo_reposicion_dias <= 365)) throw new Error('La demora del proveedor debe ser un número entero de días (0 a 365).');
+  if (!(Number.isInteger(campos.dias_seguridad) && campos.dias_seguridad >= 0 && campos.dias_seguridad <= 365)) throw new Error('El margen de seguridad debe ser un número entero de días (0 a 365).');
+  campos.control_por_rollo = f.control_por_rollo === 'on';
+  if (campos.control_por_rollo) {
+    const opc = (v) => (txt(v) === '' ? null : num(v));
+    campos.tara_kg = opc(f.tara_kg);
+    campos.peso_bruto_rollo_kg = opc(f.peso_bruto_rollo_kg);
+    campos.unidad_medida = 'kg';
+    campos.contenido_por_rollo = opc(f.contenido_por_rollo);
+    campos.unidad_referencia = campos.contenido_por_rollo ? (txt(f.unidad_referencia) || 'm') : null;
+    if (!(campos.tara_kg >= 0)) throw new Error('Cargá el peso del cono vacío (kg).');
+    if (!(campos.peso_bruto_rollo_kg > campos.tara_kg)) throw new Error('El peso bruto del rollo nuevo tiene que ser mayor que el del cono vacío.');
+    if (campos.contenido_por_rollo !== null && !(campos.contenido_por_rollo > 0)) throw new Error('La referencia por rollo tiene que ser un número mayor a 0 (o dejala vacía).');
+    delete campos.stock_actual;   // lo calcula la base con los rollos
+  }
   return campos;
 }
 
@@ -329,7 +393,7 @@ function mostrarError(el, mensaje) {
 }
 
 // ---------- Estado ----------
-const estado = { insumos: [], movimientos: [], equipos: [], perfiles: [], historial: [], conectados: [], usuario: null };
+const estado = { insumos: [], movimientos: [], equipos: [], rollos: [], perfiles: [], historial: [], conectados: [], usuario: null };
 
 const ESTILO_ESTADO = {
   ok:      { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', barra: 'bg-emerald-500', texto: 'OK' },
@@ -346,16 +410,19 @@ async function cargarDatos() {
     estado.insumos = insumos;
     estado.movimientos = movimientos;
     // Historial y usuarios: si fallan (p. ej. falta la migración), el resto sigue funcionando.
-    const [perfiles, historial, equipos] = await Promise.all([
+    const [perfiles, historial, equipos, rollos] = await Promise.all([
       datos.perfiles().catch(() => estado.perfiles),
       datos.historial().catch(() => estado.historial),
       datos.equipos().catch(() => estado.equipos),
+      datos.rollos().catch(() => estado.rollos),
     ]);
+    estado.rollos = rollos;
     estado.perfiles = perfiles;
     estado.historial = historial;
     estado.equipos = equipos;
     await fotos.firmar([...insumos, ...equipos].map((x) => x.foto_path && fotos.mini(x.foto_path))).catch(() => {});
     renderTodo();
+    if (modalRollos?.open) pintarRollos();
     if (vistaActual() === 'reportes') cargarReporte();
   } catch (err) {
     toast(`No se pudieron cargar los datos. ${err.message}`);
@@ -368,6 +435,12 @@ const VISTAS = ['panel', 'consumo', 'insumos', 'equipos', 'historial', 'reportes
 let equipoPendiente = null;   // id que llegó por QR, se abre al tener los datos
 
 function mostrarVista() {
+  const qrRollo = location.hash.match(/^#rollo=(\d+)/);
+  if (qrRollo) {
+    rolloPendiente = Number(qrRollo[1]);
+    history.replaceState(null, '', location.pathname + '#consumo');
+    abrirRolloPendiente();
+  }
   const qr = location.hash.match(/^#equipo=(\d+)/);
   if (qr) {
     equipoPendiente = Number(qr[1]);
@@ -400,6 +473,16 @@ function renderTodo() {
   renderEquipos();
   renderVencidos();
   abrirEquipoPendiente();
+  abrirRolloPendiente();
+}
+function abrirRolloPendiente() {
+  if (rolloPendiente == null || !estado.insumos.length) return;
+  const r = estado.rollos.find((x) => x.id === rolloPendiente);
+  if (!r) { rolloPendiente = null; return toast('No se encontró el rollo de esa etiqueta.'); }
+  if (r.estado === 'Terminado') { rolloPendiente = null; return toast(`El rollo ${r.codigo} ya está terminado.`); }
+  $('#c-insumo').value = String(r.insumo_id);
+  actualizarInfoInsumo();   // usa rolloPendiente para elegir el rollo
+  $('#c-peso').focus();
 }
 
 function renderKpis() {
@@ -427,7 +510,35 @@ const detalle = (i, ...extra) =>
     .filter(Boolean)
     .join(' · ');
 
+const ESTILO_QUIEBRE = {
+  pedir:  { badge: 'bg-red-50 text-red-700 ring-red-200', texto: 'Pedir ya' },
+  pronto: { badge: 'bg-amber-50 text-amber-800 ring-amber-200', texto: 'Pedir pronto' },
+};
+const textoCobertura = (i) => i.dias_cobertura == null ? '' :
+  i.stock_actual <= 0 ? 'sin stock' : i.dias_cobertura < 1 ? 'alcanza menos de 1 día' : `alcanza ~${plural(Math.floor(i.dias_cobertura), 'día', 'días')}`;
+function renderQuiebre() {
+  const lista = estado.insumos.filter((i) => i.alerta_quiebre)
+    .sort((a, b) => (a.alerta_quiebre === 'pedir' ? 0 : 1) - (b.alerta_quiebre === 'pedir' ? 0 : 1) || (a.dias_cobertura ?? 0) - (b.dias_cobertura ?? 0));
+  $('#alertas-quiebre').classList.toggle('hidden', !lista.length);
+  $('#lista-quiebre').innerHTML = lista.map((i) => {
+    const e = ESTILO_QUIEBRE[i.alerta_quiebre];
+    return `
+      <li class="flex items-center gap-3 px-4 py-2.5">
+        <span class="inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${e.badge}">${e.texto}</span>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate text-sm font-medium">${esc(i.nombre)}</span>
+          <span class="block text-xs text-slate-500">${textoCobertura(i)}${i.fecha_quiebre && i.dias_cobertura >= 1 ? ` (hasta ${fmtDia(i.fecha_quiebre)})` : ''} · el proveedor tarda ${plural(i.plazo_reposicion_dias, 'día', 'días')}${i.proveedor ? ` · ${esc(i.proveedor)}` : ''}</span>
+        </span>
+        <span class="shrink-0 text-right text-xs tabular-nums text-slate-500">
+          ${fmtNum.format(i.stock_actual)} ${esc(i.unidad_medida)}
+          <br><span class="text-slate-400">${fmtNum.format(i.consumo_semanal)}/sem${i.fuente_promedio === 'calculado' ? ' (calc.)' : ''}</span>
+        </span>
+      </li>`;
+  }).join('');
+}
+
 function renderAlertas() {
+  renderQuiebre();
   const criticos = estado.insumos
     .filter((i) => i.estado_stock !== 'ok')
     .sort((a, b) => (a.estado_stock === 'agotado' ? -1 : 1) - (b.estado_stock === 'agotado' ? -1 : 1));
@@ -598,9 +709,13 @@ function renderTablaInsumos() {
             <span class="h-2 w-2 rounded-full ${e.barra}" title="${e.texto}"></span>
             ${fmtNum.format(i.stock_actual)} <span class="text-xs text-slate-500">${esc(i.unidad_medida)}</span>
           </span>
+          ${i.control_por_rollo ? `<p class="text-[11px] text-slate-500">${plural(i.rollos_activos || 0, 'rollo', 'rollos')}${i.rollos_en_uso ? ` · ${i.rollos_en_uso} en uso` : ''}${i.contenido_por_rollo ? ` · ${equivalencias(i, i.stock_actual).split(' · ')[1]}` : ''}</p>` : ''}
+          ${i.alerta_quiebre ? `<p class="mt-0.5"><span class="inline-flex rounded-full px-1.5 py-0.5 text-[11px] font-medium ring-1 ${ESTILO_QUIEBRE[i.alerta_quiebre].badge}">${ESTILO_QUIEBRE[i.alerta_quiebre].texto}</span></p>` : ''}
+          ${i.dias_cobertura != null && i.stock_actual > 0 ? `<p class="text-[11px] text-slate-500">${textoCobertura(i)}</p>` : ''}
         </td>
         <td class="hidden px-4 py-3 text-right tabular-nums text-slate-600 lg:table-cell">${fmtNum.format(i.stock_minimo)}</td>
         <td class="text-right sm:px-4 sm:py-3">
+          ${i.control_por_rollo ? `<button type="button" data-rollos="${i.id}" class="rounded-lg border border-marca-300 px-2.5 py-1 text-sm font-medium text-marca-700 hover:bg-marca-50">Rollos</button>` : ''}
           <button type="button" data-editar="${i.id}" class="rounded-lg px-3 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
         </td>
       </tr>`;
@@ -613,6 +728,58 @@ function insumoSeleccionado() {
   return estado.insumos.find((i) => String(i.id) === $('#c-insumo').value);
 }
 
+// Rollos de un insumo, en el orden sugerido: primero los abiertos, después los más viejos (PEPS).
+const rollosActivos = (insumoId) => estado.rollos
+  .filter((r) => r.insumo_id === insumoId && r.estado !== 'Terminado')
+  .sort((a, b) => (a.estado === 'En uso' ? 0 : 1) - (b.estado === 'En uso' ? 0 : 1) || a.recibido_en.localeCompare(b.recibido_en) || a.id - b.id);
+let rolloPendiente = null;   // id que llegó por QR
+
+function pintarRolloConsumo() {
+  const i = insumoSeleccionado();
+  const porRollo = !!i?.control_por_rollo;
+  $('#c-rollo-bloque').classList.toggle('hidden', !porRollo);
+  $('#c-cantidad-bloque').classList.toggle('hidden', porRollo);
+  $('#c-cantidad').required = !porRollo;
+  if (!porRollo) return;
+  const lista = rollosActivos(i.id);
+  const previo = rolloPendiente ?? Number($('#c-rollo').value);
+  $('#c-rollo').innerHTML = lista.length
+    ? lista.map((r, k) => `<option value="${r.id}">${esc(r.codigo)} · quedan ${fmtKg(r.saldo)} kg${k === 0 ? ' · sugerido' : ''}</option>`).join('')
+    : '<option value="">No hay rollos disponibles: registrá una entrada en Insumos → Rollos</option>';
+  if (lista.some((r) => r.id === previo)) $('#c-rollo').value = String(previo);
+  rolloPendiente = null;
+  calcularConsumoRollo();
+}
+const rolloElegido = () => estado.rollos.find((r) => r.id === Number($('#c-rollo').value));
+function calcularConsumoRollo() {
+  const i = insumoSeleccionado(), r = rolloElegido();
+  const out = $('#c-calculo');
+  if (!i?.control_por_rollo) return null;
+  if (!r) { $('#c-rollo-info').textContent = ''; out.textContent = 'Elegí un rollo.'; return null; }
+  $('#c-rollo-info').textContent = `${r.estado === 'En uso' ? 'En uso' : 'Nuevo'} · último peso ${fmtKg(r.peso_actual_kg)} kg · cono ${fmtKg(r.tara_kg)} kg · ${r.usos ? plural(r.usos, 'uso', 'usos') : 'sin usar'}`;
+  const cerrar = $('#c-cerrar').checked;
+  const pesoTxt = $('#c-peso').value;
+  $('#c-peso').disabled = cerrar;
+  let cantidad = null;
+  if (cerrar) cantidad = r.saldo;
+  else if (pesoTxt !== '') {
+    const p = Number(pesoTxt);
+    if (p > r.peso_actual_kg) { out.innerHTML = `<span class="text-red-700">Pesa más que el último registro (${fmtKg(r.peso_actual_kg)} kg).</span>`; return null; }
+    if (p < r.tara_kg - 0.05) { out.innerHTML = `<span class="text-red-700">Pesa menos que el cono vacío (${fmtKg(r.tara_kg)} kg).</span>`; return null; }
+    cantidad = Math.round((r.saldo - Math.max(p - r.tara_kg, 0) * r.factor) * 1000) / 1000;
+  }
+  if (cantidad == null) { out.textContent = 'Pesá el rollo y cargá el peso.'; return null; }
+  if (!(cantidad > 0)) { out.innerHTML = '<span class="text-amber-700">El peso es igual al anterior: no hay consumo.</span>'; return null; }
+  const queda = Math.max(r.saldo - cantidad, 0);
+  const refUso = i.contenido_por_rollo ? equivalencias(i, cantidad).split(' · ')[1] : '';
+  out.innerHTML = `Consumo: <strong>${fmtKg(cantidad)} kg</strong>${refUso ? ` <span class="font-normal text-slate-500">(${refUso})</span>` : ''}` +
+    (cerrar || queda <= 0 ? ' · el rollo queda terminado' : ` · le quedan ${fmtKg(queda)} kg`);
+  return cantidad;
+}
+$('#c-rollo').addEventListener('change', calcularConsumoRollo);
+$('#c-peso').addEventListener('input', calcularConsumoRollo);
+$('#c-cerrar').addEventListener('change', calcularConsumoRollo);
+
 function actualizarInfoInsumo() {
   const i = insumoSeleccionado();
   $('#c-unidad').textContent = i ? i.unidad_medida : '—';
@@ -624,6 +791,7 @@ function actualizarInfoInsumo() {
   const conFoto = !!(i?.foto_path && fotos.url(fotos.mini(i.foto_path)));
   $('#c-foto').classList.toggle('hidden', !conFoto);
   $('#c-foto').innerHTML = conFoto ? miniatura(i.foto_path, 'h-16 w-16') : '';
+  pintarRolloConsumo();
 }
 
 $('#c-insumo').addEventListener('change', () => {
@@ -637,12 +805,16 @@ $('#form-consumo').addEventListener('submit', async (ev) => {
   const datos_form = Object.fromEntries(new FormData(form));
   const errorEl = $('#c-error');
   const insumo = insumoSeleccionado();
-  const cantidad = Number(datos_form.cantidad_retirada);
+  const porRollo = !!insumo?.control_por_rollo;
+  const rollo = porRollo ? rolloElegido() : null;
+  const cantidad = porRollo ? calcularConsumoRollo() : Number(datos_form.cantidad_retirada);
 
   // Validación rápida en el cliente (la base valida igual).
   if (!insumo) return mostrarError(errorEl, 'Seleccioná un insumo.');
-  if (!(cantidad > 0)) return mostrarError(errorEl, 'Ingresá una cantidad mayor a 0.');
-  if (cantidad > insumo.stock_actual)
+  if (porRollo && !rollo) return mostrarError(errorEl, 'Elegí el rollo que se usó.');
+  if (porRollo && !$('#c-cerrar').checked && $('#c-peso').value === '') return mostrarError(errorEl, 'Cargá el peso del rollo después de la práctica.');
+  if (!(cantidad > 0)) return mostrarError(errorEl, porRollo ? 'Revisá el peso: no da un consumo válido.' : 'Ingresá una cantidad mayor a 0.');
+  if (!porRollo && cantidad > insumo.stock_actual)
     return mostrarError(errorEl, `Solo hay ${fmtNum.format(insumo.stock_actual)} ${insumo.unidad_medida} disponibles.`);
   if (!datos_form.practica_motivo.trim()) return mostrarError(errorEl, 'Indicá la práctica o motivo.');
   if (!datos_form.responsable.trim()) return mostrarError(errorEl, 'Indicá el responsable.');
@@ -655,14 +827,28 @@ $('#form-consumo').addEventListener('submit', async (ev) => {
       cantidad_retirada: cantidad,
       practica_motivo: datos_form.practica_motivo.trim(),
       responsable: datos_form.responsable.trim(),
+      ...(porRollo ? {
+        rollo_id: rollo.id,
+        peso_despues_kg: $('#c-cerrar').checked && $('#c-peso').value === '' ? null : Number($('#c-peso').value),
+        cerrar_rollo: $('#c-cerrar').checked,
+      } : {}),
     });
     guardarLocal('responsable', datos_form.responsable.trim());
     mostrarError(errorEl, '');
     $('#c-cantidad').value = '';
+    $('#c-peso').value = '';
+    $('#c-cerrar').checked = false;
     await cargarDatos();
     const actualizado = estado.insumos.find((i) => i.id === insumo.id) || insumo;
-    toast(`Retiro registrado. Quedan ${fmtNum.format(actualizado.stock_actual)} ${actualizado.unidad_medida}.`);
-    $('#c-cantidad').focus();
+    if (porRollo) {
+      const r2 = estado.rollos.find((x) => x.id === rollo.id);
+      const refUso = actualizado.contenido_por_rollo ? ` (${equivalencias(actualizado, cantidad).split(' · ')[1]})` : '';
+      toast(`Registrado: ${fmtKg(cantidad)} kg${refUso} del rollo ${rollo.codigo}. ` +
+        (r2?.estado === 'Terminado' ? 'Rollo terminado.' : `Le quedan ${fmtKg(r2?.saldo ?? 0)} kg.`));
+    } else {
+      toast(`Retiro registrado. Quedan ${fmtNum.format(actualizado.stock_actual)} ${actualizado.unidad_medida}.`);
+      $('#c-cantidad').focus();
+    }
   } catch (err) {
     mostrarError(errorEl, err.message);
     cargarDatos(); // el stock pudo haber cambiado desde otro dispositivo
@@ -692,7 +878,20 @@ function abrirModal(insumo = null) {
   campos.namedItem('ultimo_precio').value = insumo?.ultimo_precio ?? '';
   campos.namedItem('fecha_ultimo_precio').value = insumo?.fecha_ultimo_precio ?? '';
   precioOriginal = insumo?.ultimo_precio ?? null;
+  $('#i-por-rollo').checked = !!insumo?.control_por_rollo;
+  campos.namedItem('tara_kg').value = insumo?.tara_kg ?? '';
+  campos.namedItem('peso_bruto_rollo_kg').value = insumo?.peso_bruto_rollo_kg ?? '';
+  campos.namedItem('contenido_por_rollo').value = insumo?.contenido_por_rollo ?? '';
+  campos.namedItem('unidad_referencia').value = insumo?.unidad_referencia ?? '';
+  unidadAntesDeRollo = insumo?.unidad_medida ?? '';
+  insumoEnFicha = insumo;
+  campos.namedItem('consumo_semanal_manual').value = insumo?.consumo_semanal_manual ?? '';
+  campos.namedItem('plazo_reposicion_dias').value = insumo?.plazo_reposicion_dias ?? 7;
+  campos.namedItem('dias_seguridad').value = insumo?.dias_seguridad ?? 3;
+  $$('[name=fuente_promedio]', formInsumo).forEach((x) => { x.checked = x.value === (insumo?.fuente_promedio || 'manual'); });
   actualizarUnidadPrecio();
+  pintarRolloFicha();
+  pintarAlarmaFicha();
   fotoInsumo.cargar(insumo?.foto_path);
   modal.showModal();
   campos.namedItem(insumo ? 'nombre' : 'codigo').focus();
@@ -717,12 +916,88 @@ function actualizarUnidadPrecio() {
   const u = formInsumo.elements.namedItem('unidad_medida').value.trim();
   $('#i-precio-unidad').textContent = `(por ${unidadSingular(u || 'unidades')})`;
 }
-formInsumo.elements.namedItem('unidad_medida').addEventListener('input', actualizarUnidadPrecio);
+formInsumo.elements.namedItem('unidad_medida').addEventListener('input', () => { actualizarUnidadPrecio(); pintarRolloFicha(); pintarAlarmaFicha(); });
+
+// Alarma de quiebre en la ficha: muestra cuánto alcanza el stock con el promedio elegido.
+function pintarAlarmaFicha() {
+  const f = formInsumo.elements;
+  const i = insumoEnFicha;
+  const unidad = f.namedItem('unidad_medida').value.trim() || 'unidades';
+  $('#i-consumo-unidad').textContent = unidad;
+  const calc = i?.consumo_semanal_calculado;
+  $('#i-promedio-calculado').textContent = i && i.semanas_historial
+    ? `${fmtNum.format(calc ?? 0)} ${unidad}/sem · ${plural(i.semanas_historial, 'semana', 'semanas')} de datos`
+    : 'Todavía sin historial';
+  const fuente = $$('[name=fuente_promedio]', formInsumo).find((x) => x.checked)?.value || 'manual';
+  const semanal = fuente === 'calculado' ? (calc ?? 0) : Number(f.namedItem('consumo_semanal_manual').value || 0);
+  const plazo = Number(f.namedItem('plazo_reposicion_dias').value || 0), seg = Number(f.namedItem('dias_seguridad').value || 0);
+  const stock = i ? i.stock_actual : Number(f.namedItem('stock_actual').value || 0);
+  const out = $('#i-alarma-calculo');
+  if (!(semanal > 0)) {
+    out.textContent = fuente === 'calculado'
+      ? 'Sin consumos en las últimas 8 semanas: la alarma queda apagada hasta que haya datos. Podés usar el promedio manual mientras tanto.'
+      : 'Cargá el consumo promedio por semana para activar la alarma.';
+    return;
+  }
+  const diario = semanal / 7, dias = stock / diario, pp = diario * (plazo + seg);
+  const hasta = new Date(); hasta.setDate(hasta.getDate() + Math.floor(dias));
+  out.innerHTML = `Con ${fmtNum.format(stock)} ${esc(unidad)} alcanza <strong>~${fmtNum.format(Math.floor(dias))} días</strong> (hasta ${fmtDia(isoDeFecha(hasta))}). ` +
+    `Avisa <strong>“Pedir ya”</strong> cuando queden ${fmtNum.format(+pp.toFixed(3))} ${esc(unidad)} o menos (${plazo} días de demora + ${seg} de margen), y “Pedir pronto” una semana antes.`;
+}
+['consumo_semanal_manual', 'plazo_reposicion_dias', 'dias_seguridad', 'stock_actual'].forEach((n) => formInsumo.elements.namedItem(n).addEventListener('input', pintarAlarmaFicha));
+$$('[name=fuente_promedio]', formInsumo).forEach((x) => x.addEventListener('change', pintarAlarmaFicha));
+
+// Control por rollo en la ficha del insumo
+const esKg = (u) => /^(kg|kgs|kilo|kilos|kilogramos?)$/i.test(String(u || '').trim());
+// Equivalencias de referencia para insumos por rollo: kg → ≈ rollos y ≈ metros (o la unidad de referencia).
+function equivalencias(i, kg) {
+  if (!i?.control_por_rollo || kg == null) return '';
+  const neto = (i.peso_bruto_rollo_kg || 0) - (i.tara_kg || 0);
+  if (!(neto > 0)) return '';
+  const redondeo = (v) => fmtNum.format(v >= 10 ? Math.round(v) : +v.toFixed(1));
+  const partes = [`≈ ${redondeo(kg / neto)} ${kg / neto === 1 ? 'rollo' : 'rollos'}`];
+  if (i.contenido_por_rollo > 0) partes.push(`≈ ${redondeo(kg * i.contenido_por_rollo / neto)} ${i.unidad_referencia || 'm'}`);
+  return partes.join(' · ');
+}
+let insumoEnFicha = null;
+let unidadAntesDeRollo = '';
+function pintarRolloFicha() {
+  const f = formInsumo.elements;
+  const activo = $('#i-por-rollo').checked;
+  const campoUnidad = f.namedItem('unidad_medida');
+  // Por rollo se controla en kg: la unidad queda fija mientras esté marcado.
+  if (activo && !esKg(campoUnidad.value)) { unidadAntesDeRollo = campoUnidad.value; campoUnidad.value = 'kg'; actualizarUnidadPrecio(); pintarAlarmaFicha?.(); }
+  if (!activo && campoUnidad.readOnly && unidadAntesDeRollo && !esKg(unidadAntesDeRollo)) { campoUnidad.value = unidadAntesDeRollo; actualizarUnidadPrecio(); }
+  campoUnidad.readOnly = activo;
+  campoUnidad.classList.toggle('bg-slate-50', activo);
+  $('#i-rollo-campos').classList.toggle('hidden', !activo);
+  $('#i-stock').disabled = activo;
+  $('#i-stock-rollos').classList.toggle('hidden', !activo);
+  $('#i-aviso-stock').classList.toggle('hidden', activo || !insumoEnFicha);
+  if (!activo) return;
+  const bruto = Number(f.namedItem('peso_bruto_rollo_kg').value), tara = Number(f.namedItem('tara_kg').value);
+  const neto = bruto - tara;
+  const ref = Number(f.namedItem('contenido_por_rollo').value), uref = f.namedItem('unidad_referencia').value.trim() || 'm';
+  let texto;
+  if (!(bruto > 0) || f.namedItem('tara_kg').value === '') texto = 'Cargá el peso bruto de un rollo nuevo y el del cono vacío.';
+  else if (!(neto > 0)) texto = 'El peso bruto tiene que ser mayor que el del cono.';
+  else {
+    texto = `Cada rollo nuevo trae ${fmtKg(neto)} kg netos. Stock, consumos y alarmas se llevan en kg.`;
+    if (ref > 0) texto += ` Referencia: ${fmtNum.format(ref)} ${uref} por rollo = ${fmtNum.format(+(neto * 1000 / ref).toFixed(2))} g por ${uref}.`;
+  }
+  if (insumoEnFicha && !insumoEnFicha.control_por_rollo)
+    texto += ' Al guardar, el stock pasa a armarse con los rollos que registres (arranca en 0).';
+  $('#i-rollo-calculo').textContent = texto;
+}
+$('#i-por-rollo').addEventListener('change', pintarRolloFicha);
+['tara_kg', 'peso_bruto_rollo_kg', 'contenido_por_rollo', 'unidad_referencia'].forEach((n) => formInsumo.elements.namedItem(n).addEventListener('input', pintarRolloFicha));
 
 $('#btn-nuevo').addEventListener('click', () => abrirModal());
 $('#tabla-insumos').addEventListener('click', (ev) => {
   const btn = ev.target.closest('[data-editar]');
   if (btn) abrirModal(estado.insumos.find((i) => i.id === Number(btn.dataset.editar)));
+  const br = ev.target.closest('[data-rollos]');
+  if (br) abrirRollos(Number(br.dataset.rollos));
 });
 $$('[data-cerrar]', modal).forEach((b) => b.addEventListener('click', () => modal.close()));
 modal.addEventListener('click', (ev) => { if (ev.target === modal) modal.close(); }); // clic fuera
@@ -786,6 +1061,7 @@ function conectarEventos() {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'movimientos_insumos' }, programarRecarga)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'equipos' }, programarRecarga)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'prestamos' }, programarRecarga)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rollos' }, programarRecarga)
     .on('presence', { event: 'sync' }, () => {
       // Una entrada por usuario aunque tenga la app abierta en varios dispositivos.
       estado.conectados = Object.entries(canal.presenceState()).map(([id, sesiones]) => ({
@@ -1270,23 +1546,144 @@ function etiquetaHTML(e, tam) {
     <p class="text-[10px] text-slate-500">Laboratorio · Control de Insumos</p>
   </div>`;
 }
-$('#btn-etiquetas').addEventListener('click', () => {
-  const lista = equiposFiltrados().filter((e) => e.estado !== 'De baja');
-  $('#vista-etiquetas').innerHTML = lista.length
-    ? lista.map((e) => etiquetaHTML(e, 'h-28 w-28')).join('')
-    : '<p class="col-span-full py-6 text-center text-sm text-slate-500">No hay equipos en la lista filtrada.</p>';
+// La ventana de etiquetas sirve para equipos y para rollos.
+const textoEtiquetasEquipos = $('#et-texto').innerHTML;
+let etiquetasActuales = { items: [], html: etiquetaHTML };
+function mostrarEtiquetas(titulo, texto, items, html, vacio) {
+  etiquetasActuales = { items, html };
+  $('#et-titulo').textContent = titulo;
+  $('#et-texto').innerHTML = texto;
+  $('#vista-etiquetas').innerHTML = items.length
+    ? items.map((x) => html(x, 'h-28 w-28')).join('')
+    : `<p class="col-span-full py-6 text-center text-sm text-slate-500">${vacio}</p>`;
   $$('#vista-etiquetas svg').forEach((s) => s.setAttribute('class', 'h-full w-full'));
-  $('#btn-imprimir-etiquetas').disabled = !lista.length;
+  $('#btn-imprimir-etiquetas').disabled = !items.length;
   modalEtiquetas.showModal();
+}
+$('#btn-etiquetas').addEventListener('click', () => {
+  mostrarEtiquetas('Etiquetas QR de equipos', textoEtiquetasEquipos,
+    equiposFiltrados().filter((e) => e.estado !== 'De baja'), etiquetaHTML, 'No hay equipos en la lista filtrada.');
 });
 $('#btn-imprimir-etiquetas').addEventListener('click', () => {
-  const lista = equiposFiltrados().filter((e) => e.estado !== 'De baja');
+  const { items: lista, html } = etiquetasActuales;
   const hoja = $('#hoja-etiquetas');
-  hoja.innerHTML = lista.map((e) => etiquetaHTML(e, 'h-[32mm] w-[32mm]')).join('');
+  hoja.innerHTML = lista.map((e) => html(e, 'h-[32mm] w-[32mm]')).join('');
   $$('#hoja-etiquetas svg').forEach((s) => s.setAttribute('class', 'h-full w-full'));
   modalEtiquetas.close();
   document.body.classList.add('imprimiendo-etiquetas');
   setTimeout(() => { window.print(); document.body.classList.remove('imprimiendo-etiquetas'); }, 50);
+});
+
+// ---------- Rollos: entradas, lista y etiquetas ----------
+const modalRollos = $('#modal-rollos');
+const formRollos = $('#form-rollos');
+const urlRollo = (id) => `${location.origin}${location.pathname}#rollo=${id}`;
+let insumoRollos = null;
+let rollosRecienRecibidos = [];
+
+function etiquetaRolloHTML(r, tam) {
+  let qrSvg = '';
+  if (window.qrcode) {
+    const qr = qrcode(0, 'M'); qr.addData(urlRollo(r.id)); qr.make();
+    qrSvg = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+  }
+  return `<div class="etiqueta flex flex-col items-center rounded-lg border border-dashed border-slate-300 p-3 text-center">
+    <div class="${tam}">${qrSvg}</div>
+    <p class="mt-2 font-mono text-sm font-bold">${esc(r.codigo)}</p>
+    <p class="text-xs font-semibold leading-tight">${esc(r.insumo)}</p>
+    <p class="text-[11px]">Bruto ${fmtKg(r.peso_inicial_kg)} kg · cono ${fmtKg(r.tara_kg)} kg</p>
+    <p class="text-[11px]">Recibido ${fmtDia(r.recibido_en.slice(0, 10))}</p>
+    <p class="text-[10px] text-slate-500">Escaneá para registrar el consumo</p>
+  </div>`;
+}
+
+function abrirRollos(insumoId) {
+  insumoRollos = insumoId;
+  rollosRecienRecibidos = [];
+  const i = estado.insumos.find((x) => x.id === insumoId);
+  formRollos.reset();
+  $('#ro-cantidad').value = 1;
+  $('#ro-peso').value = i?.peso_bruto_rollo_kg ?? '';
+  mostrarError($('#ro-error'), '');
+  pintarRollos();
+  modalRollos.showModal();
+}
+function pintarRollos() {
+  const i = estado.insumos.find((x) => x.id === insumoRollos);
+  if (!i) return;
+  const todos = estado.rollos.filter((r) => r.insumo_id === i.id);
+  const activos = rollosActivos(i.id);
+  const verTerminados = $('#ro-ver-terminados').checked;
+  const terminados = todos.filter((r) => r.estado === 'Terminado').sort((a, b) => (b.terminado_en || '').localeCompare(a.terminado_en || ''));
+  $('#ro-titulo').textContent = `Rollos · ${i.nombre}`;
+  $('#ro-resumen').textContent = `Stock: ${fmtKg(i.stock_actual)} kg en ${plural(activos.length, 'rollo', 'rollos')}${i.contenido_por_rollo ? ` (${equivalencias(i, i.stock_actual).split(' · ')[1]})` : ''}` +
+    (terminados.length ? ` · ${terminados.length} terminado${terminados.length === 1 ? '' : 's'}` : '');
+  const fila = (r, k) => {
+    const pct = r.contenido_inicial ? Math.max(0, Math.min(100, (r.saldo / r.contenido_inicial) * 100)) : 0;
+    const badge = r.estado === 'En uso' ? 'bg-marca-50 text-marca-800 ring-marca-200'
+      : r.estado === 'Nuevo' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-500 ring-slate-200';
+    return `<li class="px-3 py-2.5 ${r.estado === 'Terminado' ? 'opacity-60' : ''}">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span class="whitespace-nowrap font-mono text-sm font-semibold">${esc(r.codigo)}</span>
+        <span class="whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${badge}">${r.estado}</span>
+        ${k === 0 && r.estado !== 'Terminado' ? '<span class="whitespace-nowrap text-[11px] font-medium text-marca-700">usar primero</span>' : ''}
+        <span class="ml-auto whitespace-nowrap text-right text-sm tabular-nums">${r.estado === 'Terminado' ? '—' : `${fmtKg(r.saldo)} <span class="text-xs text-slate-500">kg</span>${i.contenido_por_rollo ? `<span class="block text-[11px] text-slate-500">${equivalencias(i, r.saldo).split(' · ')[1]}</span>` : ''}`}</span>
+      </div>
+      ${r.estado === 'Terminado' ? '' : `<div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100"><div class="h-full rounded-full" style="width:${pct.toFixed(1)}%;background:${pct <= 15 ? '#f59e0b' : '#0090c0'}"></div></div>`}
+      <p class="mt-1 text-[11px] text-slate-500">Pesa ${fmtKg(r.peso_actual_kg)} kg · recibido ${fmtDia(r.recibido_en.slice(0, 10))}${r.precio != null ? ` · ${fmtMoneda(r.precio)}` : ''} · ${r.usos ? plural(r.usos, 'uso', 'usos') : 'sin usar'}${r.terminado_en ? ` · terminado ${fmtDia(r.terminado_en.slice(0, 10))}` : ''}</p>
+    </li>`;
+  };
+  const lista = [...activos, ...(verTerminados ? terminados : [])];
+  $('#ro-lista').innerHTML = lista.length
+    ? lista.map(fila).join('')
+    : '<li class="px-3 py-6 text-center text-sm text-slate-500">Todavía no hay rollos. Registrá la primera entrada arriba.</li>';
+  calcularEntradaRollos();
+}
+function calcularEntradaRollos() {
+  const i = estado.insumos.find((x) => x.id === insumoRollos);
+  if (!i) return;
+  const n = Math.floor(Number($('#ro-cantidad').value)), peso = Number($('#ro-peso').value), precio = $('#ro-precio').value;
+  const c = peso - (i.tara_kg || 0);
+  const ref = i.contenido_por_rollo ? ` (${equivalencias(i, c * n).split(' · ')[1]})` : '';
+  $('#ro-calculo').textContent = n > 0 && c > 0
+    ? `Suma ${fmtKg(c * n)} kg netos${ref} · ${fmtKg(c)} kg por rollo` +
+      (precio !== '' ? ` · ${fmtMoneda(Number(precio) / c)} por kg` : '') + '. Los códigos se generan solos.'
+    : 'Cargá la cantidad de rollos y el peso bruto de cada uno.';
+}
+['#ro-cantidad', '#ro-peso', '#ro-precio'].forEach((x) => $(x).addEventListener('input', calcularEntradaRollos));
+$('#ro-ver-terminados').addEventListener('change', pintarRollos);
+$$('[data-cerrar]', modalRollos).forEach((b) => b.addEventListener('click', () => modalRollos.close()));
+modalRollos.addEventListener('click', (ev) => { if (ev.target === modalRollos) modalRollos.close(); });
+
+formRollos.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const i = estado.insumos.find((x) => x.id === insumoRollos);
+  const n = Math.floor(Number($('#ro-cantidad').value)), peso = Number($('#ro-peso').value);
+  const precio = $('#ro-precio').value === '' ? null : Number($('#ro-precio').value);
+  if (!(n >= 1 && n <= 50)) return mostrarError($('#ro-error'), 'La cantidad de rollos tiene que estar entre 1 y 50.');
+  if (!(peso > (i.tara_kg || 0))) return mostrarError($('#ro-error'), `El peso bruto tiene que ser mayor que el del cono vacío (${fmtKg(i.tara_kg)} kg).`);
+  if (precio !== null && !(precio >= 0)) return mostrarError($('#ro-error'), 'El precio tiene que ser un número mayor o igual a 0.');
+  const boton = formRollos.querySelector('[type=submit]');
+  boton.disabled = true;
+  try {
+    const ids = await datos.recibirRollos(Array.from({ length: n }, () => ({ insumo_id: i.id, peso_inicial_kg: peso, precio })));
+    mostrarError($('#ro-error'), '');
+    await cargarDatos();
+    rollosRecienRecibidos = estado.rollos.filter((r) => ids.includes(r.id));
+    pintarRollos();
+    toast(`Entrada registrada: ${plural(n, 'rollo', 'rollos')} (${rollosRecienRecibidos.map((r) => r.codigo).join(', ')}).`);
+    mostrarEtiquetas(`Etiquetas de los rollos recibidos`, 'Pegá cada etiqueta en su rollo. Al escanearla se abre <strong>Registrar consumo</strong> con ese rollo elegido.',
+      rollosRecienRecibidos, etiquetaRolloHTML, '');
+  } catch (err) {
+    mostrarError($('#ro-error'), err.message);
+  } finally {
+    boton.disabled = false;
+  }
+});
+$('#ro-etiquetas').addEventListener('click', () => {
+  const i = estado.insumos.find((x) => x.id === insumoRollos);
+  mostrarEtiquetas(`Etiquetas de rollos · ${i?.nombre || ''}`, 'Pegá cada etiqueta en su rollo. Al escanearla se abre <strong>Registrar consumo</strong> con ese rollo elegido.',
+    rollosActivos(insumoRollos), etiquetaRolloHTML, 'No hay rollos activos.');
 });
 
 // ---------- Usuarios: nombres, conectados y último acceso ----------
@@ -1352,11 +1749,15 @@ function renderUsuarios() {
 const ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', categoria: 'Categoría', stock_actual: 'Stock',
   stock_minimo: 'Mínimo', unidad_medida: 'Unidad', proveedor: 'Proveedor', ultimo_precio: 'Últ. precio', fecha_ultimo_precio: 'Fecha precio',
   codigo_serie: 'N.º de serie', activo_fijo_utec: 'Activo fijo UTEC', activo_fijo_n: 'Activo fijo N', es_conjunto: 'Es conjunto', conjunto_id: 'Conjunto', marca_modelo: 'Marca/modelo', ubicacion: 'Ubicación', estado: 'Estado',
-  fecha_adquisicion: 'Fecha compra', valor_compra: 'Valor', observaciones: 'Observaciones' };
+  fecha_adquisicion: 'Fecha compra', valor_compra: 'Valor', observaciones: 'Observaciones',
+  control_por_rollo: 'Control por rollo', tara_kg: 'Cono vacío (kg)', peso_bruto_rollo_kg: 'Rollo nuevo (kg)', contenido_por_rollo: 'Referencia por rollo', unidad_referencia: 'Unidad de referencia',
+  consumo_semanal_manual: 'Consumo semanal', fuente_promedio: 'Promedio', plazo_reposicion_dias: 'Demora proveedor (días)', dias_seguridad: 'Margen (días)' };
 
 function valorLegible(campo, v) {
-  if (campo === 'es_conjunto') return v ? 'Sí' : 'No';
+  if (campo === 'es_conjunto' || campo === 'control_por_rollo') return v ? 'Sí' : 'No';
   if (campo === 'conjunto_id') return v == null ? '—' : (buscarEquipo(v)?.nombre || `#${v}`);
+  if (campo === 'fuente_promedio') return v === 'calculado' ? 'Calculado' : 'Manual';
+  if (['consumo_semanal_manual', 'tara_kg', 'peso_bruto_rollo_kg', 'contenido_por_rollo'].includes(campo) && v != null && v !== '') return fmtNum.format(Number(v));
   if (v == null || v === '') return '—';
   if (campo === 'ultimo_precio' || campo === 'valor_compra') return fmtMoneda(Number(v));
   if (campo === 'stock_actual' || campo === 'stock_minimo') return fmtNum.format(Number(v));
@@ -1381,6 +1782,7 @@ function renderHistorial() {
     edicion: ['bg-marca-50 text-marca-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M4 20h4L19 9l-4-4L4 16v4z"/>'],
     prestamo: ['bg-violet-50 text-violet-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-5-5l5 5-5 5"/>'],
     devolucion: ['bg-teal-50 text-teal-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M19 12H5m5-5l-5 5 5 5"/>'],
+    entrada: ['bg-emerald-50 text-emerald-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/>'],
   };
 
   $('#lista-historial').innerHTML = lista.length
@@ -1392,7 +1794,10 @@ function renderHistorial() {
         const codigo = h.codigo ? ` <span class="font-mono text-xs text-slate-400">${esc(h.codigo)}</span>` : '';
         if (h.tipo === 'consumo') {
           titulo = `Consumo de <strong>${fmtNum.format(h.cantidad)} ${esc(h.unidad_medida)}</strong> · ${esc(h.item)}`;
-          detalle = `${esc(h.motivo)} · retiró ${esc(h.responsable)}`;
+          detalle = `${esc(h.motivo)} · retiró ${esc(h.responsable)}${h.detalle ? ` · ${esc(h.detalle)}` : ''}`;
+        } else if (h.tipo === 'entrada') {
+          titulo = `Entrada de <strong>${fmtNum.format(h.cantidad)} ${esc(h.unidad_medida)}</strong> · ${esc(h.item)}`;
+          detalle = [esc(h.motivo), h.detalle && esc(h.detalle)].filter(Boolean).join(' · ');
         } else if (h.tipo === 'prestamo') {
           titulo = `${etiquetaEquipo}Préstamo de <strong>${esc(h.item)}</strong>${codigo} a <strong>${esc(h.responsable)}</strong>`;
           detalle = [h.motivo && esc(h.motivo), h.detalle && esc(h.detalle)].filter(Boolean).join(' · ');
@@ -2012,9 +2417,19 @@ $('#btn-excel').addEventListener('click', async (ev) => {
     XLSX.utils.book_append_sheet(libro, resumen, 'Resumen');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Fecha', 'Código', 'Insumo', 'Categoría', 'Cantidad', 'Unidad', 'Precio unitario', 'Costo', 'Práctica / motivo', 'Retiró', 'Registró'],
-      consumos.map((c) => [serialExcel(c.fecha_hora), c.codigo || '', c.insumo, c.categoria, c.cantidad, c.unidad_medida, c.precio_unitario, c.costo, c.practica_motivo, c.responsable, c.registrado_por || '']),
-      { 0: FECHA_HORA, 4: NUM, 6: PESOS, 7: PESOS }, [16, 12, 30, 16, 10, 10, 14, 14, 28, 20, 24]), 'Consumos');
+      ['Fecha', 'Código', 'Insumo', 'Categoría', 'Cantidad', 'Unidad', 'Precio unitario', 'Costo', 'Práctica / motivo', 'Retiró', 'Registró', 'Rollo', 'Peso antes (kg)', 'Peso después (kg)'],
+      consumos.map((c) => [serialExcel(c.fecha_hora), c.codigo || '', c.insumo, c.categoria, c.cantidad, c.unidad_medida, c.precio_unitario, c.costo, c.practica_motivo, c.responsable, c.registrado_por || '',
+        c.rollo_codigo || '', aNumero(c.peso_antes_kg), aNumero(c.peso_despues_kg)]),
+      { 0: FECHA_HORA, 4: NUM, 6: PESOS, 7: PESOS, 12: '0.000', 13: '0.000' }, [16, 12, 30, 16, 10, 10, 14, 14, 28, 20, 24, 14, 12, 12]), 'Consumos');
+
+    if (estado.rollos.length) {
+      const insumoDe = new Map(estado.insumos.map((i) => [i.id, i]));
+      XLSX.utils.book_append_sheet(libro, hoja(XLSX,
+        ['Rollo', 'Insumo', 'Estado', 'Queda (kg)', 'Equivalente', 'Neto inicial (kg)', 'Peso bruto inicial (kg)', 'Peso actual (kg)', 'Cono (kg)', 'Precio', 'Usos', 'Recibido', 'Terminado'],
+        estado.rollos.filter((r) => filtro({ categoria: r.categoria })).map((r) => [r.codigo, r.insumo, r.estado, r.saldo, r.estado === 'Terminado' ? '' : equivalencias(insumoDe.get(r.insumo_id), r.saldo),
+          r.contenido_inicial, r.peso_inicial_kg, r.peso_actual_kg, r.tara_kg, r.precio, r.usos, serialExcel(r.recibido_en), serialExcel(r.terminado_en)]),
+        { 3: '0.000', 5: '0.000', 6: '0.000', 7: '0.000', 8: '0.000', 9: PESOS, 11: FECHA_HORA, 12: FECHA_HORA }, [16, 28, 11, 10, 20, 12, 14, 12, 10, 12, 7, 16, 16]), 'Rollos');
+    }
 
     const porInsumo = agrupar(consumos, (c) => c.insumo_id, (c) => ({ codigo: c.codigo, nombre: c.insumo, categoria: c.categoria, unidad: c.unidad_medida }));
     const stockDe = new Map(estado.insumos.map((i) => [i.id, i]));
@@ -2040,10 +2455,13 @@ $('#btn-excel').addEventListener('click', async (ev) => {
       { 0: FECHA_HORA, 9: FECHA, 10: FECHA_HORA, 14: '0.0' }, [16, 12, 14, 14, 26, 14, 20, 16, 24, 12, 16, 10, 10, 8, 7, 24, 24, 22, 22]), 'Préstamos');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Código', 'Insumo', 'Categoría', 'Stock', 'Mínimo', 'Unidad', 'Estado', 'Proveedor', 'Último precio', 'Fecha precio', 'Valor en stock'],
+      ['Código', 'Insumo', 'Categoría', 'Stock', 'Mínimo', 'Unidad', 'Estado', 'Proveedor', 'Último precio', 'Fecha precio', 'Valor en stock',
+        'Consumo semanal', 'Promedio', 'Días que alcanza', 'Demora proveedor (días)', 'Punto de pedido', 'Alarma'],
       estado.insumos.filter(filtro).map((i) => [i.codigo || '', i.nombre, i.categoria, i.stock_actual, i.stock_minimo, i.unidad_medida,
-        ESTILO_ESTADO[i.estado_stock]?.texto || i.estado_stock, i.proveedor || '', i.ultimo_precio, serialExcel(i.fecha_ultimo_precio), i.valor_stock]),
-      { 3: NUM, 4: NUM, 8: PESOS, 9: FECHA, 10: PESOS }, [12, 30, 16, 10, 10, 10, 12, 20, 14, 12, 14]), 'Stock actual');
+        ESTILO_ESTADO[i.estado_stock]?.texto || i.estado_stock, i.proveedor || '', i.ultimo_precio, serialExcel(i.fecha_ultimo_precio), i.valor_stock,
+        i.consumo_semanal, i.consumo_semanal == null ? '' : i.fuente_promedio === 'calculado' ? 'Calculado' : 'Manual', i.dias_cobertura,
+        i.plazo_reposicion_dias, i.punto_pedido, ESTILO_QUIEBRE[i.alerta_quiebre]?.texto || '']),
+      { 3: NUM, 4: NUM, 8: PESOS, 9: FECHA, 10: PESOS, 11: NUM, 13: '0.0', 15: NUM }, [12, 30, 16, 10, 10, 10, 12, 20, 14, 12, 14, 12, 11, 12, 12, 12, 13]), 'Stock actual');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
       ['N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones', 'Tipo', 'Conjunto'],

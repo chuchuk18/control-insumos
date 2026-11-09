@@ -19,6 +19,8 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 | `supabase/05-reportes.sql` | Supabase | Precio histórico de cada consumo y vistas para reportes (ejecutar después de `04`) |
 | `supabase/06-activos-fijos.sql` | Supabase | Códigos de activo fijo UTEC y N en equipos (ejecutar después de `05`) |
 | `supabase/07-conjuntos.sql` | Supabase | Conjuntos de equipos: armado, préstamo y devolución por partes (ejecutar después de `06`) |
+| `supabase/08-rollos.sql` | Supabase | Seguimiento por rollo (film, cintas): entradas, consumo por pesada (ejecutar después de `07`) |
+| `supabase/09-alarma-quiebre.sql` | Supabase | Alarma de quiebre: consumo promedio, demora del proveedor, punto de pedido (ejecutar después de `08`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -31,6 +33,35 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - Los movimientos quedan como historial: no se editan ni se borran, y registran qué usuario los cargó.
 - Alerta de reposición cuando el stock es igual o menor al mínimo.
 - Código y nombre de insumo únicos (sin distinguir mayúsculas).
+
+## Alarma de quiebre de stock
+
+- En la ficha de cada insumo (**Alarma de quiebre**): consumo promedio por semana, demora del proveedor y margen de
+  seguridad, en días.
+- **Promedio manual** (el valor cargado) o **calculado** (consumo real de las últimas 8 semanas; si hay menos historial,
+  divide por las semanas que hay). Se puede pasar de uno a otro en cualquier momento; la ficha muestra los dos.
+- La app calcula cuántos días alcanza el stock y el **punto de pedido** = consumo diario × (demora + margen):
+  - **Pedir ya**: el stock ya está en el punto de pedido o por debajo.
+  - **Pedir pronto**: llega al punto de pedido en menos de una semana.
+- Se ve en el **Panel** (*Riesgo de quiebre de stock*), en la tabla de Insumos y en la hoja *Stock actual* del Excel.
+- Es independiente del *stock mínimo*, que sigue funcionando igual.
+
+## Rollos (film stretch, cintas)
+
+- **Se controla en kg**, lo que mide la balanza: stock, consumos, mínimos y alarmas. Al marcar *Controlar por rollo* la
+  unidad del insumo queda en kg.
+- **Configurar** (ficha del insumo): peso bruto de un rollo nuevo y peso del cono vacío. Opcional: **referencia por rollo**
+  (por ejemplo 100 m) para mostrar equivalencias (≈ rollos, ≈ metros); no cambia el control.
+- **Recibir rollos** (Insumos → *Rollos* → *Registrar entrada*): cantidad, peso bruto y precio de cada rollo. Suma stock,
+  actualiza el precio por kg y genera códigos (`EMB-001-R001`…) con sus **etiquetas QR**.
+- **Registrar consumo**: se elige el rollo (la app sugiere primero el abierto y después el más viejo) y se carga el **peso
+  después de la práctica**: la base calcula los kg usados (y muestra ≈ metros si hay referencia). *El rollo se terminó*
+  da por usado lo que quede.
+- Al escanear la etiqueta de un rollo se abre *Registrar consumo* con ese rollo elegido.
+- El stock de un insumo por rollo es la suma de sus rollos y no se edita a mano. Cada rollo guarda su cono y su precio al
+  recibirlo, así que cambiar la ficha después solo afecta a los rollos nuevos.
+- Al activar el control por rollo en un insumo que ya tenía stock, el stock arranca en 0: registrá los rollos que hay.
+- Historial muestra entradas y pesadas (`Rollo EMB-001-R001 · 2,600 → 2,250 kg`); el Excel suma la hoja **Rollos**.
 
 ## Equipos (control de activos y préstamos)
 
@@ -114,7 +145,7 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - **Respaldo de datos:** pestaña **Reportes** → período *Este año* (o fechas a elección) → **Excel**.
   También: Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql` y `datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql`, `08-rollos.sql`, `09-alarma-quiebre.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 
@@ -134,4 +165,4 @@ Colores institucionales: celeste `#00a9e0` (`marca-500`) y azul de títulos `#1d
 
 ## Próximos pasos sugeridos
 
-- Movimientos de entrada/reposición (actualizando último precio y proveedor automáticamente).
+- Entradas de stock para insumos que no van por rollo.
