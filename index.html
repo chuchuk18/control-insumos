@@ -57,7 +57,7 @@
         </div>
       </div>
 
-      <nav class="hidden gap-0.5 md:flex lg:ml-4 lg:gap-1">
+      <nav class="hidden gap-0.5 md:flex lg:ml-4 lg:gap-1 tactil:!hidden">
         <a href="#panel"   data-nav="panel"   class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Panel</a>
         <a href="#consumo" data-nav="consumo" class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Consumo</a>
         <a href="#insumos" data-nav="insumos" class="nav-link whitespace-nowrap rounded px-2 py-1.5 text-sm font-medium text-white hover:bg-white/15 lg:px-3">Insumos</a>
@@ -79,7 +79,7 @@
     </div>
   </header>
 
-  <main class="mx-auto max-w-6xl px-4 pb-28 pt-5 md:pb-10">
+  <main class="mx-auto max-w-6xl px-4 pb-28 pt-5 md:pb-10 tactil:pb-28">
 
     <!-- Aviso de instalación: solo en celular, fuera de la app instalada -->
     <div id="aviso-instalar" class="mb-4 hidden print:!hidden items-start gap-3 rounded-xl border border-marca-200 bg-marca-50 p-3 text-sm md:hidden">
@@ -510,7 +510,7 @@
   </main>
 
   <!-- ============ NAVEGACIÓN MÓVIL ============ -->
-  <nav class="fixed inset-x-0 bottom-0 z-20 grid grid-cols-6 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] print:hidden md:hidden">
+  <nav class="fixed inset-x-0 bottom-0 z-30 grid grid-cols-6 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] print:hidden md:hidden tactil:grid">
     <a href="#panel" data-nav="panel" class="nav-link flex min-w-0 flex-col items-center gap-0.5 py-2 text-[11px] font-medium text-slate-500">
       <span class="nav-pill rounded-full px-2.5 py-1"><svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 13h6V4H4v9zm0 7h6v-5H4v5zm10 0h6v-9h-6v9zm0-16v5h6V4h-6z"/></svg></span>
       Panel
@@ -683,6 +683,7 @@
             </label>
             <button type="button" id="i-foto-quitar" class="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">Quitar</button>
           </div>
+          <p id="i-foto-info" class="mt-1 hidden text-xs text-slate-500"></p>
         </div>
       </div>
 
@@ -801,6 +802,7 @@
             </label>
             <button type="button" id="e-foto-quitar" class="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">Quitar</button>
           </div>
+          <p id="e-foto-info" class="mt-1 hidden text-xs text-slate-500"></p>
         </div>
       </div>
 

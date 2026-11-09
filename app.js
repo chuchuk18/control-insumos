@@ -187,6 +187,8 @@ const datos = {
 // ---------- Fotos (Supabase Storage, bucket privado "fotos") ----------
 // Se sube una versión reducida (máx. 1024 px, ~100 KB) y una miniatura (240 px, ~10 KB).
 // Las direcciones firmadas duran 7 días y se reutilizan para que el navegador las guarde.
+// Las fotos del celular pueden venir de 12 a 50 MP: se achican una sola vez, al elegirlas,
+// a 1024 px (~100 KB) + miniatura de 240 px. Eso es lo único que se sube.
 async function reducirFoto(archivo) {
   let fuente;
   try {
@@ -199,19 +201,30 @@ async function reducirFoto(archivo) {
       img.src = URL.createObjectURL(archivo);
     });
   }
-  const escalar = (max, calidad) => {
-    const k = Math.min(1, max / Math.max(fuente.width, fuente.height));
+  const lienzo = (origen, max) => {
+    const k = Math.min(1, max / Math.max(origen.width, origen.height));
     const c = document.createElement('canvas');
-    c.width = Math.round(fuente.width * k);
-    c.height = Math.round(fuente.height * k);
+    c.width = Math.max(1, Math.round(origen.width * k));
+    c.height = Math.max(1, Math.round(origen.height * k));
     const ctx = c.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, c.width, c.height);
-    ctx.drawImage(fuente, 0, 0, c.width, c.height);
-    return new Promise((ok, mal) => c.toBlob((b) => (b ? ok(b) : mal(new Error('No se pudo procesar la imagen.'))), 'image/jpeg', calidad));
+    ctx.drawImage(origen, 0, 0, c.width, c.height);
+    return c;
   };
-  return { grande: await escalar(1024, 0.8), mini: await escalar(240, 0.72) };
+  const aJpeg = (c, calidad) => new Promise((ok, mal) =>
+    c.toBlob((b) => (b ? ok(b) : mal(new Error('No se pudo procesar la imagen.'))), 'image/jpeg', calidad));
+  // Primero a 2048 px y de ahí a 1024: se ve más nítido que achicar 50 MP de un salto.
+  const intermedio = lienzo(fuente, 2048);
+  const ancho = fuente.width, alto = fuente.height;
+  fuente.close?.();
+  const grande = lienzo(intermedio, 1024);
+  const resultado = { grande: await aJpeg(grande, 0.78), mini: await aJpeg(lienzo(grande, 240), 0.72) };
+  intermedio.width = intermedio.height = 0;
+  return { ...resultado, ancho: grande.width, alto: grande.height, anchoOriginal: ancho, altoOriginal: alto };
 }
+const fmtPeso = (b) => (b >= 1e6 ? `${fmtNum.format(+(b / 1e6).toFixed(1))} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
 
 const fotos = {
   cache: (() => { try { return JSON.parse(localStorage.getItem('fotos-urls') || '{}'); } catch { return {}; } })(),
@@ -229,8 +242,8 @@ const fotos = {
     for (const [p, c] of Object.entries(this.cache)) if (c.vence < ahora) delete this.cache[p];
     this.guardarCache();
   },
-  async subir(tipo, id, archivo) {
-    const { grande, mini } = await reducirFoto(archivo);
+  async subir(tipo, id, foto) {
+    const { grande, mini } = foto.grande ? foto : await reducirFoto(foto);
     const base = `${tipo}/${id}/${Date.now()}`;
     const opciones = { contentType: 'image/jpeg', cacheControl: '31536000', upsert: false };
     const r1 = await sb.storage.from('fotos').upload(`${base}.jpg`, grande, opciones);
@@ -287,8 +300,10 @@ document.addEventListener('click', (ev) => {
 
 // Control del campo "Foto" de un formulario (prefijo "i" = insumo, "e" = equipo).
 function controlFoto(prefijo) {
-  const s = { actual: null, nueva: null, quitar: false, previa: null };
+  const s = { actual: null, nueva: null, quitar: false, previa: null, procesando: null };
   const input = $(`#${prefijo}-foto`), prev = $(`#${prefijo}-foto-prev`), quitar = $(`#${prefijo}-foto-quitar`), texto = $(`#${prefijo}-foto-texto`);
+  const info = $(`#${prefijo}-foto-info`);
+  const mostrarInfo = (t) => { info.textContent = t || ''; info.classList.toggle('hidden', !t); };
   const limpiarPrevia = () => { if (s.previa) URL.revokeObjectURL(s.previa); s.previa = null; };
   const pintar = () => {
     const url = s.nueva ? s.previa : (!s.quitar && s.actual ? fotos.url(fotos.mini(s.actual)) : '');
@@ -301,21 +316,32 @@ function controlFoto(prefijo) {
     const f = input.files[0];
     input.value = '';
     if (!f) return;
-    if (!/^image\//.test(f.type)) return toast('Elegí un archivo de imagen.');
-    if (f.size > 25e6) return toast('La imagen es demasiado grande (máx. 25 MB).');
-    limpiarPrevia();
-    s.nueva = f; s.previa = URL.createObjectURL(f); s.quitar = false;
-    pintar();
+    if (f.type && !/^image\//.test(f.type)) return toast('Elegí un archivo de imagen.');
+    if (f.size > 60e6) return toast('La imagen es demasiado grande (máx. 60 MB).');
+    // Se achica en el momento: la vista previa y lo que se sube ya son livianos.
+    mostrarInfo('Achicando la foto…');
+    texto.textContent = 'Procesando…';
+    const tarea = s.procesando = reducirFoto(f).then((red) => {
+      if (s.procesando !== tarea) return;
+      limpiarPrevia();
+      s.nueva = red; s.previa = URL.createObjectURL(red.mini); s.quitar = false;
+      mostrarInfo(`Se sube a ${red.ancho}×${red.alto} px · ${fmtPeso(red.grande.size)} (la original: ${fmtPeso(f.size)}${red.anchoOriginal ? `, ${fmtNum.format(+(red.anchoOriginal * red.altoOriginal / 1e6).toFixed(0))} MP` : ''}).`);
+      pintar();
+    }).catch((err) => {
+      if (s.procesando !== tarea) return;
+      mostrarInfo(''); pintar(); toast(err.message);
+    }).finally(() => { if (s.procesando === tarea) s.procesando = null; });
   });
-  quitar.addEventListener('click', () => { limpiarPrevia(); s.nueva = null; s.quitar = true; pintar(); });
+  quitar.addEventListener('click', () => { s.procesando = null; limpiarPrevia(); s.nueva = null; s.quitar = true; mostrarInfo(''); pintar(); });
   prev.addEventListener('click', () => {
-    if (s.nueva) verFoto(s.previa);
+    if (s.nueva) verFoto(URL.createObjectURL(s.nueva.grande));
     else if (!s.quitar && s.actual) verFoto(s.actual);
   });
   return {
-    cargar(path) { limpiarPrevia(); s.actual = path || null; s.nueva = null; s.quitar = false; pintar(); },
+    cargar(path) { s.procesando = null; limpiarPrevia(); s.actual = path || null; s.nueva = null; s.quitar = false; mostrarInfo(''); pintar(); },
     // Sube/quita la foto y devuelve el cambio a guardar, o null si no hubo cambios.
     async aplicar(tipo, id) {
+      if (s.procesando) await s.procesando.catch(() => {});
       if (s.nueva) return { foto_path: await fotos.subir(tipo, id, s.nueva), anterior: s.actual };
       if (s.quitar && s.actual) return { foto_path: null, anterior: s.actual };
       return null;

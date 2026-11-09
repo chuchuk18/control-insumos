@@ -86,7 +86,8 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 ## Fotos
 
 - Cada insumo y equipo puede tener una foto (desde la cámara o la galería) al darlo de alta o editarlo.
-- Antes de subirla, la app la reduce: versión de máx. 1024 px (~100 KB) y miniatura de 240 px (~10 KB).
+- Apenas se elige, la app la reduce (también fotos de 50 MP de celulares nuevos): versión de máx. 1024 px
+  (~100–150 KB) y miniatura de 240 px (~5–10 KB), y muestra el tamaño final. Solo eso se sube.
   Las listas cargan solo las miniaturas; tocándolas se ve la foto completa.
 - Se ven en Panel, Insumos, Equipos, **Registrar consumo** (para identificar el producto) y al prestar o recibir.
 - Se guardan en un bucket **privado** de Supabase Storage (`fotos`): solo las ven usuarios con sesión.
@@ -148,6 +149,9 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
   (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql`, `08-rollos.sql`, `09-alarma-quiebre.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
+
+En celulares y tabletas la barra de navegación queda siempre abajo, también con el teléfono en horizontal.
+
 
 Abrir la dirección de la app → iniciar sesión → Android: menú ⋮ → *Instalar app* /
 *Agregar a pantalla principal*; iPhone: Compartir → *Agregar a inicio*.
