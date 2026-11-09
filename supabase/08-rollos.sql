@@ -3,11 +3,12 @@
 --  Ejecutar después de 07-conjuntos.sql. Se puede repetir.
 --
 --  - Un insumo puede "controlarse por rollo": cada rollo tiene código y etiqueta QR.
+--  - Se controla en kg, lo que mide la balanza: stock, consumos, mínimos y alarmas.
 --  - En el insumo se cargan el peso bruto de un rollo nuevo y el peso del cono vacío.
---    Si la unidad es kg, el contenido es el peso neto; si es otra (metros), se carga
---    el contenido por rollo y la base convierte peso → unidad.
---  - Cada rollo guarda su propia tara, factor y precio al recibirlo (cambiar los datos
---    del insumo después solo afecta a los rollos nuevos).
+--    Opcional: contenido de referencia por rollo (p. ej. 100 m) para mostrar equivalencias
+--    (≈ rollos, ≈ metros); no cambia el control, que sigue en kg.
+--  - Cada rollo guarda su propio cono y precio al recibirlo (cambiar los datos del insumo
+--    después solo afecta a los rollos nuevos).
 --  - Recibir rollos suma stock (entrada). Consumir = pesar el rollo después de la
 --    práctica: la base calcula cuánto se usó y lo descuenta.
 --  - El stock de un insumo por rollo es la suma de sus rollos: no se edita a mano.
@@ -18,6 +19,7 @@ alter table public.insumos add column if not exists control_por_rollo   boolean 
 alter table public.insumos add column if not exists tara_kg             numeric(10,3) check (tara_kg is null or tara_kg >= 0);
 alter table public.insumos add column if not exists peso_bruto_rollo_kg numeric(10,3) check (peso_bruto_rollo_kg is null or peso_bruto_rollo_kg > 0);
 alter table public.insumos add column if not exists contenido_por_rollo numeric(14,3) check (contenido_por_rollo is null or contenido_por_rollo > 0);
+alter table public.insumos add column if not exists unidad_referencia   text;   -- unidad del contenido de referencia (p. ej. 'm')
 
 -- 2. Rollos
 create table if not exists public.rollos (
@@ -27,7 +29,7 @@ create table if not exists public.rollos (
   peso_inicial_kg  numeric(10,3) not null check (peso_inicial_kg > 0),
   peso_actual_kg   numeric(10,3) not null check (peso_actual_kg >= 0),
   tara_kg          numeric(10,3) not null check (tara_kg >= 0),
-  factor           numeric(16,6) not null check (factor > 0),          -- unidades del insumo por kg neto
+  factor           numeric(16,6) not null default 1 check (factor > 0), -- kg de stock por kg neto (siempre 1: se controla en kg)
   precio           numeric(14,2) check (precio is null or precio >= 0), -- precio del rollo completo
   estado           text not null default 'Nuevo' check (estado in ('Nuevo', 'En uso', 'Terminado')),
   saldo            numeric(14,3) generated always as (
@@ -72,9 +74,15 @@ begin
   end if;
   if tg_op = 'INSERT' then
     if new.control_por_rollo then
+      if lower(trim(new.unidad_medida)) not in ('kg', 'kgs', 'kilo', 'kilos', 'kilogramo', 'kilogramos') then
+        raise exception 'ROLLO_EN_KG';
+      end if;
       new.stock_actual := 0;
     end if;
     return new;
+  end if;
+  if new.control_por_rollo and lower(trim(new.unidad_medida)) not in ('kg', 'kgs', 'kilo', 'kilos', 'kilogramo', 'kilogramos') then
+    raise exception 'ROLLO_EN_KG';
   end if;
   if new.control_por_rollo and not old.control_por_rollo then
     -- Pasa a controlarse por rollo: el stock se arma con los rollos que se registren.
@@ -113,9 +121,6 @@ begin
   if i.tara_kg is null then
     raise exception 'FALTA_TARA';
   end if;
-  if i.contenido_por_rollo is not null and (i.peso_bruto_rollo_kg is null or i.peso_bruto_rollo_kg <= i.tara_kg) then
-    raise exception 'FALTA_PESO_BRUTO';
-  end if;
 
   new.peso_inicial_kg := coalesce(new.peso_inicial_kg, i.peso_bruto_rollo_kg);
   if new.peso_inicial_kg is null or new.peso_inicial_kg <= i.tara_kg then
@@ -123,8 +128,7 @@ begin
   end if;
 
   new.tara_kg        := i.tara_kg;
-  new.factor         := case when i.contenido_por_rollo is null then 1
-                             else i.contenido_por_rollo / (i.peso_bruto_rollo_kg - i.tara_kg) end;
+  new.factor         := 1;   -- el stock se lleva en kg netos
   new.peso_actual_kg := new.peso_inicial_kg;
   new.estado         := 'Nuevo';
   new.recibido_en    := now();
@@ -279,7 +283,7 @@ as $$
 declare
   campos  text[] := array['codigo', 'nombre', 'categoria', 'stock_actual', 'stock_minimo',
                           'unidad_medida', 'proveedor', 'ultimo_precio', 'fecha_ultimo_precio',
-                          'control_por_rollo', 'tara_kg', 'peso_bruto_rollo_kg', 'contenido_por_rollo'];
+                          'control_por_rollo', 'tara_kg', 'peso_bruto_rollo_kg', 'contenido_por_rollo', 'unidad_referencia'];
   campo   text;
   antes   jsonb;
   despues jsonb;
@@ -449,5 +453,5 @@ begin
   end if;
 end $$;
 
-select id, codigo, nombre, unidad_medida, control_por_rollo, tara_kg, peso_bruto_rollo_kg, contenido_por_rollo
+select id, codigo, nombre, unidad_medida, control_por_rollo, tara_kg, peso_bruto_rollo_kg, contenido_por_rollo, unidad_referencia
   from public.insumos order by id;

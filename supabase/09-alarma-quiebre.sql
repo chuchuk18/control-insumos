@@ -32,7 +32,7 @@ as $$
 declare
   campos  text[] := array['codigo', 'nombre', 'categoria', 'stock_actual', 'stock_minimo',
                           'unidad_medida', 'proveedor', 'ultimo_precio', 'fecha_ultimo_precio',
-                          'control_por_rollo', 'tara_kg', 'peso_bruto_rollo_kg', 'contenido_por_rollo',
+                          'control_por_rollo', 'tara_kg', 'peso_bruto_rollo_kg', 'contenido_por_rollo', 'unidad_referencia',
                           'consumo_semanal_manual', 'fuente_promedio', 'plazo_reposicion_dias', 'dias_seguridad'];
   campo   text;
   antes   jsonb;
