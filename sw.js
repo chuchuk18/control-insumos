@@ -1,6 +1,6 @@
 // Service worker: guarda la "cáscara" de la app para que abra rápido.
 // Los datos (Supabase) siempre se piden en vivo: nunca se muestra stock viejo.
-const CACHE = 'insumos-web-v17';
+const CACHE = 'insumos-web-v18';
 const CASCARA = ['./', 'index.html', 'app.js', 'config.js', 'styles.css', 'manifest.webmanifest',
   'vendor/supabase.js', 'vendor/qrcode.js', 'icons/icon-192.png'];
 
@@ -22,8 +22,9 @@ self.addEventListener('fetch', (ev) => {
   if (ev.request.method !== 'GET' || url.origin !== location.origin) return;
 
   // Primero la red (versión más nueva); sin conexión, lo guardado.
+  // 'no-cache' pregunta siempre al servidor si hay versión nueva (GitHub Pages guarda 10 min en el navegador).
   ev.respondWith(
-    fetch(ev.request)
+    fetch(ev.request, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) {
           const copia = res.clone();
