@@ -1,6 +1,8 @@
 # Control de Insumos — versión web
 
 App para registrar el consumo y la baja de insumos en prácticas académicas.
+
+**Autor:** Richard Castro — Laboratorio de Logística, UTEC (2026). Diseño, desarrollo y puesta en marcha del sistema.
 Funciona desde PC y celular, en cualquier red, y se instala en el celular como app.
 
 - **Interfaz:** sitio estático (HTML + JavaScript + Tailwind compilado) publicado en GitHub Pages.

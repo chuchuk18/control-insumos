@@ -2,6 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
+  <meta name="author" content="Richard Castro" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#00a9e0" />
   <title>Control de Insumos</title>
@@ -145,7 +146,7 @@
         </div>
 
         <div class="grid gap-5 lg:grid-cols-3">
-          <div class="rounded-xl border border-slate-200 bg-white lg:col-span-2">
+          <div class="min-w-0 rounded-xl border border-slate-200 bg-white lg:col-span-2">
             <div class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
               <h2 class="mr-auto text-sm font-semibold">Stock actual</h2>
               <input id="filtro-texto" type="search" placeholder="Nombre, código, proveedor…" class="w-44 rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500 sm:w-48" />
@@ -324,7 +325,7 @@
         <p class="text-sm text-slate-500">Quién registró cada consumo, préstamo, devolución, alta y modificación.</p>
       </div>
       <div class="grid gap-5 lg:grid-cols-3">
-        <div class="rounded-xl border border-slate-200 bg-white lg:col-span-2">
+        <div class="min-w-0 rounded-xl border border-slate-200 bg-white lg:col-span-2">
           <div class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
             <select id="h-tipo" class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:border-marca-500 focus:outline-none">
               <option value="">Todo</option>
@@ -517,6 +518,7 @@
         </div>
       </div>
     </section>
+    <p class="mt-10 text-center text-xs text-slate-400 print:hidden" data-credito>Desarrollado por <span class="font-medium">Richard Castro</span> · Laboratorio de Logística, UTEC</p>
   </main>
 
   <!-- ============ NAVEGACIÓN MÓVIL ============ -->
@@ -1065,6 +1067,7 @@
         </button>
         <button type="submit" class="rounded-lg bg-marca-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-marca-600 disabled:opacity-60">Guardar</button>
       </div>
+      <p class="border-t border-slate-100 pt-3 text-center text-xs text-slate-400">Control de Insumos · Desarrollado por <span class="font-medium">Richard Castro</span> · Laboratorio de Logística, UTEC</p>
     </form>
   </dialog>
 
@@ -1118,6 +1121,7 @@
         <span class="text-slate-500">Cuentas: responsable del laboratorio</span>
       </div>
     </form>
+    <p class="mx-auto mt-6 max-w-sm px-4 text-center text-xs text-slate-400">Desarrollado por <span class="font-medium">Richard Castro</span> · Laboratorio de Logística, UTEC</p>
   </div>
 
   <!-- Aviso si falta configurar Supabase -->
