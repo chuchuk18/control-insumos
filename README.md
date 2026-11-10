@@ -1,4 +1,4 @@
-# Control de Insumos — versión web
+# LogiStock — control de insumos y equipos
 
 App para registrar el consumo y la baja de insumos en prácticas académicas.
 

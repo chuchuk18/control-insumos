@@ -1,7 +1,7 @@
 {
-  "name": "Control de Insumos",
-  "short_name": "Insumos",
-  "description": "Control y baja de insumos consumibles para prácticas académicas.",
+  "name": "LogiStock — Laboratorio de Logística ITRSO",
+  "short_name": "LogiStock",
+  "description": "Control de insumos, equipos y préstamos del Laboratorio de Logística ITRSO – UTEC.",
   "lang": "es",
   "id": "./",
   "start_url": "./#panel",
