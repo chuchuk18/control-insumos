@@ -2747,9 +2747,10 @@ function aplicarTema(tema = temaElegido()) {
   $('meta[name="theme-color"]')?.setAttribute('content', oscuro ? '#0c3346' : '#00a9e0');
   $$('[data-icono-tema="luna"]').forEach((el) => el.classList.toggle('hidden', oscuro));
   $$('[data-icono-tema="sol"]').forEach((el) => el.classList.toggle('hidden', !oscuro));
-  const b = $('#btn-tema');
-  b.title = oscuro ? 'Modo claro' : 'Modo oscuro';
-  b.setAttribute('aria-label', oscuro ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro');
+  $$('[data-cambiar-tema]').forEach((b) => {
+    b.title = oscuro ? 'Modo claro' : 'Modo oscuro';
+    b.setAttribute('aria-label', oscuro ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro');
+  });
   $$('#cu-tema [data-tema]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.tema === tema)));
   if (vistaActual() === 'reportes' && rep.cargadoEn) renderReporte();   // el gráfico toma los colores nuevos
 }
@@ -2757,7 +2758,7 @@ function elegirTema(tema) {
   guardarLocal('tema', tema);
   aplicarTema(tema);
 }
-$('#btn-tema').addEventListener('click', () => elegirTema(esOscuro() ? 'claro' : 'oscuro'));
+$$('[data-cambiar-tema]').forEach((b) => b.addEventListener('click', () => elegirTema(esOscuro() ? 'claro' : 'oscuro')));
 $('#cu-tema').addEventListener('click', (ev) => { const b = ev.target.closest('[data-tema]'); if (b) elegirTema(b.dataset.tema); });
 mediaOscuro.addEventListener('change', () => { if (temaElegido() === 'auto') aplicarTema('auto'); });
 aplicarTema();
