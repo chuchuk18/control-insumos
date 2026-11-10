@@ -1,6 +1,6 @@
 {
-  "name": "LogiStock — Laboratorio de Logística ITRSO",
-  "short_name": "LogiStock",
+  "name": "StockLab — Laboratorio de Logística ITRSO",
+  "short_name": "StockLab",
   "description": "Control de insumos, equipos y préstamos del Laboratorio de Logística ITRSO – UTEC.",
   "lang": "es",
   "id": "./",

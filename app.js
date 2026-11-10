@@ -1,5 +1,5 @@
 // =====================================================================
-//  LogiStock (Control de Insumos) — Frontend (JavaScript vanilla)
+//  StockLab (Control de Insumos) — Frontend (JavaScript vanilla)
 // =====================================================================
 
 // ---------- Utilidades ----------
@@ -1616,7 +1616,7 @@ function etiquetaHTML(e, tam) {
     ${e.activo_fijo_n ? `<p class="font-mono text-[11px]">AF N ${esc(e.activo_fijo_n)}</p>` : ''}
     ${e.es_conjunto ? `<p class="text-[11px] font-semibold">Conjunto · ${plural(e.componentes || 0, 'componente', 'componentes')}</p>` : ''}
     ${e.conjunto_id ? `<p class="text-[11px]">Parte de: ${esc(e.conjunto_nombre || '')}</p>` : ''}
-    <p class="text-[10px] text-slate-500">LogiStock · Lab. de Logística ITRSO</p>
+    <p class="text-[10px] text-slate-500">StockLab · Lab. de Logística ITRSO</p>
   </div>`;
 }
 // La ventana de etiquetas sirve para equipos y para rollos.
