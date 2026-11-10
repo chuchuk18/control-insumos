@@ -2269,8 +2269,8 @@ function dibujarColumnas(cont, cubetas) {
   const cadaCuanto = Math.max(1, Math.ceil(cubetas.length / Math.max(1, Math.floor(w / 46))));
   let svg = `<svg viewBox="0 0 ${ancho} ${alto}" width="100%" height="${alto}" role="img" aria-label="${esc($('#r-tiempo-titulo').textContent)}" class="block select-none overflow-visible" font-family="inherit">`;
   for (const t of ticks) {
-    svg += `<line x1="${m.l}" x2="${ancho - m.r}" y1="${y(t)}" y2="${y(t)}" stroke="${t ? '#eef2f6' : '#cbd5e1'}" stroke-width="1" shape-rendering="crispEdges"/>`;
-    svg += `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end" font-size="11" fill="#64748b" style="font-variant-numeric:tabular-nums">${esc(textoEje(t))}</text>`;
+    svg += `<line x1="${m.l}" x2="${ancho - m.r}" y1="${y(t)}" y2="${y(t)}" class="${t ? 'stroke-slate-100' : 'stroke-slate-300'}" stroke-width="1" shape-rendering="crispEdges"/>`;
+    svg += `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end" font-size="11" class="fill-slate-500" style="font-variant-numeric:tabular-nums">${esc(textoEje(t))}</text>`;
   }
   cubetas.forEach((b, i) => {
     const v = valores[i];
@@ -2280,7 +2280,7 @@ function dibujarColumnas(cont, cubetas) {
       const r = Math.min(4, grosor / 2, y0 - yTop);
       svg += `<path data-barra="${i}" d="M${x},${y0}V${yTop + r}Q${x},${yTop} ${x + r},${yTop}H${x + grosor - r}Q${x + grosor},${yTop} ${x + grosor},${yTop + r}V${y0}Z" fill="${COLOR_DATO}"/>`;
     }
-    if (i % cadaCuanto === 0) svg += `<text x="${m.l + i * banda + banda / 2}" y="${alto - 6}" text-anchor="middle" font-size="11" fill="#64748b">${esc(b.corta)}</text>`;
+    if (i % cadaCuanto === 0) svg += `<text x="${m.l + i * banda + banda / 2}" y="${alto - 6}" text-anchor="middle" font-size="11" class="fill-slate-500">${esc(b.corta)}</text>`;
     const tip = `<b>${esc(b.larga)}</b><br>${fmtPesos(b.costo)} · ${plural(b.retiros, 'retiro', 'retiros')}${b.sinPrecio ? `<br><span class="text-slate-300">${b.sinPrecio} sin precio</span>` : ''}`;
     svg += `<rect data-tip="${esc(tip)}" data-i="${i}" x="${m.l + i * banda}" y="${m.t}" width="${banda}" height="${h}" fill="transparent"/>`;
   });
@@ -2341,7 +2341,7 @@ function renderPrestamosReporte() {
     ['Con daño', fmtEntero.format(pr.filter((p) => p.condicion_devolucion === 'Con daño').length)],
     ['Duración media', promedio == null ? '—' : plural(+promedio.toFixed(1), 'día', 'días')],
   ];
-  $('#r-prestamos-datos').innerHTML = datosPr.map(([t, v]) => `<div class="bg-white px-3 py-2.5"><dt class="text-[11px] text-slate-500">${t}</dt><dd class="text-lg font-semibold tabular-nums text-slate-800">${v}</dd></div>`).join('');
+  $('#r-prestamos-datos').innerHTML = datosPr.map(([t, v]) => `<div class="bg-superficie px-3 py-2.5"><dt class="text-[11px] text-slate-500">${t}</dt><dd class="text-lg font-semibold tabular-nums text-slate-800">${v}</dd></div>`).join('');
   const porEquipo = new Map();
   for (const p of pr) {
     const g = porEquipo.get(p.equipo_id) || { etiqueta: p.equipo, codigo: p.codigo_serie, valor: 0, dias: 0 };
@@ -2734,3 +2734,30 @@ formTc.addEventListener('submit', async (ev) => {
     btn.disabled = false;
   }
 });
+
+
+// ---------- Tema claro / oscuro ----------
+// 'auto' sigue al sistema; 'claro' u 'oscuro' quedan fijos en este dispositivo.
+const mediaOscuro = window.matchMedia('(prefers-color-scheme: dark)');
+const temaElegido = () => leerLocal('tema') || 'auto';
+const esOscuro = () => document.documentElement.classList.contains('dark');
+function aplicarTema(tema = temaElegido()) {
+  const oscuro = tema === 'oscuro' || (tema === 'auto' && mediaOscuro.matches);
+  document.documentElement.classList.toggle('dark', oscuro);
+  $('meta[name="theme-color"]')?.setAttribute('content', oscuro ? '#0c3346' : '#00a9e0');
+  $$('[data-icono-tema="luna"]').forEach((el) => el.classList.toggle('hidden', oscuro));
+  $$('[data-icono-tema="sol"]').forEach((el) => el.classList.toggle('hidden', !oscuro));
+  const b = $('#btn-tema');
+  b.title = oscuro ? 'Modo claro' : 'Modo oscuro';
+  b.setAttribute('aria-label', oscuro ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro');
+  $$('#cu-tema [data-tema]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.tema === tema)));
+  if (vistaActual() === 'reportes' && rep.cargadoEn) renderReporte();   // el gráfico toma los colores nuevos
+}
+function elegirTema(tema) {
+  guardarLocal('tema', tema);
+  aplicarTema(tema);
+}
+$('#btn-tema').addEventListener('click', () => elegirTema(esOscuro() ? 'claro' : 'oscuro'));
+$('#cu-tema').addEventListener('click', (ev) => { const b = ev.target.closest('[data-tema]'); if (b) elegirTema(b.dataset.tema); });
+mediaOscuro.addEventListener('change', () => { if (temaElegido() === 'auto') aplicarTema('auto'); });
+aplicarTema();

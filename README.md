@@ -49,6 +49,11 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - Se ve en el **Panel** (*Riesgo de quiebre de stock*), en la tabla de Insumos y en la hoja *Stock actual* del Excel.
 - Es independiente del *stock mínimo*, que sigue funcionando igual.
 
+## Modo oscuro
+
+- Botón de luna/sol en el encabezado para cambiar entre claro y oscuro. En **Mi cuenta → Apariencia** se elige Automático (sigue al celular o la PC), Claro u Oscuro. Se recuerda en cada dispositivo.
+- Los colores salen de variables CSS en `estilos/entrada.css`; las etiquetas QR y la impresión siempre salen en claro.
+
 ## Moneda: pesos y dólares
 
 - Cada insumo, rollo y equipo tiene su precio en **$ (UYU)** o **US$ (USD)**.

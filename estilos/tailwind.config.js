@@ -1,13 +1,20 @@
 // Configuración para regenerar styles.css si se cambian clases en index.html o app.js:
 //   npx tailwindcss@3 -c estilos/tailwind.config.js -i estilos/entrada.css -o styles.css --minify
+// Los colores salen de variables CSS (estilos/entrada.css) para poder cambiar a modo oscuro.
+const tonos = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
+const paleta = (n) => Object.fromEntries(tonos.map((t) => [t, `rgb(var(--${n}-${t}) / <alpha-value>)`]));
 module.exports = {
   content: ['./index.html', './app.js'],
   theme: { extend: {
     // Celulares y tabletas (pantalla táctil sin mouse): siempre con la barra de abajo, también en horizontal.
     screens: { tactil: { raw: '(hover: none) and (pointer: coarse)' } },
+    borderColor: { DEFAULT: 'rgb(var(--slate-200) / <alpha-value>)' },
     colors: {
-    marca: { 50:'#e5f6fc', 100:'#ccedf9', 200:'#99dbf3', 300:'#66c9ec', 400:'#33b7e6',
-             500:'#00a9e0', 600:'#0090c0', 700:'#00759c', 800:'#005a78', 900:'#003f55' },
-    titulo: '#1d559d',
-  } } },
+      slate: paleta('slate'), red: paleta('red'), amber: paleta('amber'), emerald: paleta('emerald'),
+      violet: paleta('violet'), teal: paleta('teal'), marca: paleta('marca'),
+      superficie: 'rgb(var(--superficie) / <alpha-value>)',   // fondo de tarjetas y ventanas
+      tinta: '#0f172a',                                       // fondo oscuro fijo (avisos, visor de fotos)
+      titulo: 'rgb(var(--titulo) / <alpha-value>)',
+    },
+  } },
 };
