@@ -114,6 +114,7 @@
             <p class="text-xs font-medium text-slate-500">Valor en stock</p>
             <p id="kpi-valor" class="mt-1 truncate text-2xl font-semibold tabular-nums">–</p>
             <p id="kpi-valor-nota" class="hidden text-[11px] text-slate-400"></p>
+            <button type="button" id="kpi-valor-usd" data-abrir-tc class="hidden text-left text-[11px] font-medium text-marca-700 hover:underline"></button>
           </div>
         </div>
 
@@ -240,6 +241,7 @@
         <div>
           <h2 class="text-lg font-semibold text-titulo">Insumos</h2>
           <p class="text-sm text-slate-500">Alta y edición del catálogo.</p>
+          <button type="button" data-abrir-tc class="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 hover:bg-slate-200"><span data-tc-texto>Tipo de cambio</span></button>
         </div>
         <button id="btn-nuevo" type="button" class="inline-flex items-center gap-1.5 rounded-lg bg-marca-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-marca-600">
           <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
@@ -396,6 +398,14 @@
             <option value="">Todas</option>
           </select>
         </label>
+        <div class="col-span-2 sm:col-span-1">
+          <p class="text-xs font-medium text-slate-500">Moneda</p>
+          <div id="r-moneda" role="group" aria-label="Moneda" class="mt-1 inline-flex w-full rounded-lg border border-slate-300 p-0.5 sm:w-auto">
+            <button type="button" data-moneda="UYU" class="flex-1 whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium text-slate-600 aria-pressed:bg-marca-500 aria-pressed:text-white">$</button>
+            <button type="button" data-moneda="USD" class="flex-1 whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium text-slate-600 aria-pressed:bg-marca-500 aria-pressed:text-white">US$</button>
+          </div>
+          <button type="button" data-abrir-tc class="mt-1 block text-[11px] font-medium text-marca-700 hover:underline"><span data-tc-texto>Tipo de cambio</span></button>
+        </div>
         <div class="col-span-2 sm:col-span-1 sm:ml-auto">
           <p class="text-xs font-medium text-slate-500">Medir por</p>
           <div id="r-medida" role="group" aria-label="Medir por" class="mt-1 inline-flex w-full rounded-lg border border-slate-300 p-0.5 sm:w-auto">
@@ -659,7 +669,7 @@
           <div>
             <label class="mb-1 block text-sm font-medium" for="i-precio">Últ. precio <span id="i-precio-unidad" class="font-normal text-slate-500"></span></label>
             <div class="flex">
-              <span class="inline-flex items-center rounded-l-lg border border-r-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">$</span>
+              <select id="i-moneda" name="moneda_precio" aria-label="Moneda del precio" class="rounded-l-lg border border-r-0 border-slate-300 bg-slate-50 px-1.5 text-sm text-slate-600 focus:border-marca-500 focus:outline-none"><option value="UYU">$</option><option value="USD">US$</option></select>
               <input id="i-precio" name="ultimo_precio" type="number" inputmode="decimal" min="0" step="any" placeholder="0,00" class="w-full min-w-0 rounded-r-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
             </div>
           </div>
@@ -668,6 +678,7 @@
             <input id="i-fecha" name="fecha_ultimo_precio" type="date" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
           </div>
         </div>
+        <p id="i-precio-equiv" class="hidden text-xs text-slate-500"></p>
       </fieldset>
 
       <div class="flex items-center gap-3 rounded-lg border border-slate-200 p-3">
@@ -780,7 +791,7 @@
         <div>
           <label class="mb-1 block text-sm font-medium" for="e-valor">Valor de compra</label>
           <div class="flex">
-            <span class="inline-flex items-center rounded-l-lg border border-r-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">$</span>
+            <select id="e-moneda" name="moneda_valor" aria-label="Moneda del valor" class="rounded-l-lg border border-r-0 border-slate-300 bg-slate-50 px-1.5 text-sm text-slate-600 focus:border-marca-500 focus:outline-none"><option value="UYU">$</option><option value="USD">US$</option></select>
             <input id="e-valor" name="valor_compra" type="number" inputmode="decimal" min="0" step="any" placeholder="Opcional" class="w-full min-w-0 rounded-r-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
           </div>
         </div>
@@ -901,6 +912,44 @@
   </dialog>
 
   <!-- ============ MODAL ETIQUETAS QR ============ -->
+  <dialog id="modal-tc" class="w-[min(26rem,calc(100vw-2rem))] rounded-xl p-0 shadow-xl">
+    <form id="form-tc" class="space-y-4 p-5" novalidate>
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h3 class="text-base font-semibold">Tipo de cambio</h3>
+          <p id="tc-actual" class="text-sm text-slate-600"></p>
+        </div>
+        <button type="button" data-cerrar class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Cerrar">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <p class="text-xs text-slate-500">Se usa para los precios en US$ y para ver los reportes en dólares. Cada consumo guarda el tipo de cambio del día, así los costos pasados no cambian. Cotización oficial: <a href="https://www.bcu.gub.uy/Estadisticas-e-Indicadores/Paginas/Cotizaciones.aspx" target="_blank" rel="noopener" class="font-medium text-marca-700 underline">BCU</a>.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="mb-1 block text-sm font-medium" for="tc-valor">1 US$ =</label>
+          <div class="flex">
+            <span class="inline-flex items-center rounded-l-lg border border-r-0 border-slate-300 bg-slate-50 px-2.5 text-sm text-slate-500">$</span>
+            <input id="tc-valor" type="number" inputmode="decimal" min="0" step="0.0001" placeholder="0,00" required class="w-full min-w-0 rounded-r-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+          </div>
+        </div>
+        <div>
+          <label class="mb-1 block text-sm font-medium" for="tc-fecha">Fecha</label>
+          <input id="tc-fecha" type="date" required class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+        </div>
+      </div>
+      <div>
+        <label class="mb-1 block text-sm font-medium" for="tc-fuente">Fuente</label>
+        <input id="tc-fuente" type="text" maxlength="40" value="BCU" class="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+      </div>
+      <p id="tc-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+      <button type="submit" class="w-full rounded-lg bg-marca-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-marca-600 disabled:opacity-60">Guardar cotización</button>
+      <div>
+        <p class="mb-1 text-xs font-medium text-slate-500">Últimas cotizaciones</p>
+        <ul id="tc-historial" class="divide-y divide-slate-100 rounded-lg border border-slate-200 text-sm"></ul>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="modal-rollos" class="max-h-[calc(100dvh-2rem)] w-[min(40rem,calc(100vw-2rem))] overflow-y-auto rounded-xl p-0 shadow-xl">
     <div class="space-y-4 p-5">
       <div class="flex items-start justify-between gap-3">
@@ -925,8 +974,11 @@
             <input id="ro-peso" type="number" inputmode="decimal" min="0" step="0.001" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
           </div>
           <div>
-            <label class="mb-1 block text-xs font-medium text-slate-600" for="ro-precio">Precio c/u ($)</label>
-            <input id="ro-precio" type="number" inputmode="decimal" min="0" step="any" placeholder="Opcional" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+            <label class="mb-1 block text-xs font-medium text-slate-600" for="ro-precio">Precio c/u</label>
+            <div class="flex">
+              <select id="ro-moneda" aria-label="Moneda del precio" class="rounded-l-lg border border-r-0 border-slate-300 bg-slate-50 px-1 text-sm text-slate-600 focus:border-marca-500 focus:outline-none"><option value="UYU">$</option><option value="USD">US$</option></select>
+              <input id="ro-precio" type="number" inputmode="decimal" min="0" step="any" placeholder="Opcional" class="w-full min-w-0 rounded-r-lg border border-slate-300 px-2 py-2 text-base focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500" />
+            </div>
           </div>
         </div>
         <p id="ro-calculo" class="text-xs text-slate-500"></p>

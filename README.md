@@ -21,6 +21,7 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 | `supabase/07-conjuntos.sql` | Supabase | Conjuntos de equipos: armado, préstamo y devolución por partes (ejecutar después de `06`) |
 | `supabase/08-rollos.sql` | Supabase | Seguimiento por rollo (film, cintas): entradas, consumo por pesada (ejecutar después de `07`) |
 | `supabase/09-alarma-quiebre.sql` | Supabase | Alarma de quiebre: consumo promedio, demora del proveedor, punto de pedido (ejecutar después de `08`) |
+| `supabase/10-moneda.sql` | Supabase | Precios en pesos o dólares y tipo de cambio (ejecutar después de `09`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -45,6 +46,14 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
   - **Pedir pronto**: llega al punto de pedido en menos de una semana.
 - Se ve en el **Panel** (*Riesgo de quiebre de stock*), en la tabla de Insumos y en la hoja *Stock actual* del Excel.
 - Es independiente del *stock mínimo*, que sigue funcionando igual.
+
+## Moneda: pesos y dólares
+
+- Cada insumo, rollo y equipo tiene su precio en **$ (UYU)** o **US$ (USD)**.
+- El **tipo de cambio** (1 US$ = $ X) se carga en el botón "Tipo de cambio" (Insumos, Reportes o el Panel), con fecha y fuente (por defecto BCU). Queda un historial.
+- Cada consumo guarda el tipo de cambio de ese día: los costos pasados no cambian aunque después cambie el dólar.
+- El valor del stock, los reportes y el Excel se pueden ver en pesos o en dólares (botón **$ / US$** en Reportes). El Excel trae ambos.
+- Si hay precios en US$ y todavía no se cargó ningún tipo de cambio, esos costos quedan sin calcular y la app lo avisa.
 
 ## Rollos (film stretch, cintas)
 
@@ -146,7 +155,7 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - **Respaldo de datos:** pestaña **Reportes** → período *Este año* (o fechas a elección) → **Excel**.
   También: Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql`, `08-rollos.sql`, `09-alarma-quiebre.sql` y `datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql`, `08-rollos.sql`, `09-alarma-quiebre.sql`, `10-moneda.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 

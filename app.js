@@ -9,7 +9,18 @@ const fmtNum = new Intl.NumberFormat('es-UY', { maximumFractionDigits: 3 });
 const fmtKgN = new Intl.NumberFormat('es-UY', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 const fmtKg = (v) => fmtKgN.format(v || 0);
 const fmtPrecio = new Intl.NumberFormat('es-UY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmtMoneda = (n) => (n == null ? '—' : `$ ${fmtPrecio.format(n)}`);
+const SIMBOLO = { UYU: '$', USD: 'US$' };
+const fmtMoneda = (n, moneda = 'UYU') => (n == null ? '—' : `${SIMBOLO[moneda] || '$'} ${fmtPrecio.format(n)}`);
+// Tipo de cambio vigente (1 US$ = X $), el más reciente cargado.
+const tcActual = () => estado.tiposCambio?.[0]?.usd_uyu ?? null;
+// Convierte entre $ y US$ con el tipo de cambio vigente; null si hace falta y no hay.
+function convertir(valor, de = 'UYU', a = 'UYU') {
+  if (valor == null) return null;
+  if (de === a) return valor;
+  const tc = tcActual();
+  if (!tc) return null;
+  return de === 'USD' ? valor * tc : valor / tc;
+}
 const fmtDia = (iso) => (iso ? iso.split('-').reverse().join('/') : '');   // 2026-10-27 → 27/10/2026
 const hoyISO = () => {
   const d = new Date();
@@ -43,6 +54,7 @@ function traducirError(error) {
   if (msg.includes('ESTADO_PRESTADO_MANUAL')) return new Error('El estado "Prestado" se maneja con préstamos y devoluciones.');
   const det = (codigo) => (msg.match(new RegExp(codigo + ':([^\\n]+)')) || [])[1]?.trim();
   const kg = (codigo) => { const v = Number(det(codigo)); return Number.isFinite(v) ? `${fmtKg(v)} kg` : ''; };
+  if (msg.includes('FECHA_FUTURA')) return new Error('La fecha de la cotización no puede ser futura.');
   if (msg.includes('ROLLO_EN_KG')) return new Error('Los insumos que se controlan por rollo se llevan en kg (lo que mide la balanza).');
   if (msg.includes('STOCK_POR_ROLLOS')) return new Error('El stock de este insumo se calcula con sus rollos: registrá una entrada de rollos o un consumo.');
   if (msg.includes('FALTA_ROLLO')) return new Error('Este insumo se controla por rollo: elegí el rollo y cargá el peso.');
@@ -80,6 +92,7 @@ const normalizarInsumo = (i) => ({
   stock_minimo: aNumero(i.stock_minimo),
   ultimo_precio: aNumero(i.ultimo_precio),
   valor_stock: aNumero(i.valor_stock),
+  valor_stock_usd: aNumero(i.valor_stock_usd),
   tara_kg: aNumero(i.tara_kg),
   peso_bruto_rollo_kg: aNumero(i.peso_bruto_rollo_kg),
   contenido_por_rollo: aNumero(i.contenido_por_rollo),
@@ -131,6 +144,15 @@ const datos = {
     if (error) throw traducirError(error);
     return data.id;
   },
+  async tiposCambio() {
+    const { data, error } = await sb.from('tipos_cambio').select('*').order('fecha', { ascending: false }).order('id', { ascending: false }).limit(12);
+    if (error) throw traducirError(error);
+    return data.map((t) => ({ ...t, usd_uyu: aNumero(t.usd_uyu) }));
+  },
+  async agregarTipoCambio(fila) {
+    const { error } = await sb.from('tipos_cambio').insert(fila);
+    if (error) throw traducirError(error);
+  },
   async rollos() {
     const { data, error } = await sb.from('v_rollos').select('*').order('recibido_en').order('id');
     if (error) throw traducirError(error);
@@ -148,7 +170,7 @@ const datos = {
   async equipos() {
     const { data, error } = await sb.from('v_equipos').select('*').order('categoria').order('nombre');
     if (error) throw traducirError(error);
-    return data.map((e) => ({ ...e, valor_compra: aNumero(e.valor_compra), valor_componentes: aNumero(e.valor_componentes) }));
+    return data.map((e) => ({ ...e, valor_compra: aNumero(e.valor_compra), valor_componentes: aNumero(e.valor_componentes), valor_compra_uyu: aNumero(e.valor_compra_uyu) }));
   },
   async guardarEquipo(id, campos) {
     if (id) {
@@ -382,6 +404,7 @@ function prepararInsumo(f) {
   if (!(campos.stock_minimo >= 0)) throw new Error('El stock mínimo debe ser un número mayor o igual a 0.');
   if (campos.ultimo_precio !== null && !(campos.ultimo_precio >= 0)) throw new Error('El precio debe ser un número mayor o igual a 0.');
   if (campos.ultimo_precio !== null && !campos.fecha_ultimo_precio) campos.fecha_ultimo_precio = hoyISO();
+  campos.moneda_precio = f.moneda_precio === 'USD' ? 'USD' : 'UYU';
   campos.consumo_semanal_manual = txt(f.consumo_semanal_manual) === '' ? null : num(f.consumo_semanal_manual);
   campos.fuente_promedio = f.fuente_promedio === 'calculado' ? 'calculado' : 'manual';
   campos.plazo_reposicion_dias = txt(f.plazo_reposicion_dias) === '' ? 7 : num(f.plazo_reposicion_dias);
@@ -419,7 +442,7 @@ function mostrarError(el, mensaje) {
 }
 
 // ---------- Estado ----------
-const estado = { insumos: [], movimientos: [], equipos: [], rollos: [], perfiles: [], historial: [], conectados: [], usuario: null };
+const estado = { insumos: [], movimientos: [], equipos: [], rollos: [], tiposCambio: [], perfiles: [], historial: [], conectados: [], usuario: null };
 
 const ESTILO_ESTADO = {
   ok:      { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', barra: 'bg-emerald-500', texto: 'OK' },
@@ -436,13 +459,15 @@ async function cargarDatos() {
     estado.insumos = insumos;
     estado.movimientos = movimientos;
     // Historial y usuarios: si fallan (p. ej. falta la migración), el resto sigue funcionando.
-    const [perfiles, historial, equipos, rollos] = await Promise.all([
+    const [perfiles, historial, equipos, rollos, tiposCambio] = await Promise.all([
       datos.perfiles().catch(() => estado.perfiles),
       datos.historial().catch(() => estado.historial),
       datos.equipos().catch(() => estado.equipos),
       datos.rollos().catch(() => estado.rollos),
+      datos.tiposCambio().catch(() => estado.tiposCambio),
     ]);
     estado.rollos = rollos;
+    estado.tiposCambio = tiposCambio;
     estado.perfiles = perfiles;
     estado.historial = historial;
     estado.equipos = equipos;
@@ -500,6 +525,7 @@ function renderTodo() {
   renderVencidos();
   abrirEquipoPendiente();
   abrirRolloPendiente();
+  renderTipoCambio();
 }
 function abrirRolloPendiente() {
   if (rolloPendiente == null || !estado.insumos.length) return;
@@ -520,9 +546,14 @@ function renderKpis() {
   const conPrecio = estado.insumos.filter((i) => i.valor_stock != null);
   const total = conPrecio.reduce((s, i) => s + i.valor_stock, 0);
   $('#kpi-valor').textContent = conPrecio.length ? `$ ${fmtNum.format(Math.round(total))}` : '—';
-  const sinPrecio = estado.insumos.length - conPrecio.length;
+  const enUsdSinTc = !tcActual() && estado.insumos.some((i) => i.moneda_precio === 'USD' && i.ultimo_precio != null);
+  const sinPrecio = estado.insumos.filter((i) => i.ultimo_precio == null).length;
   $('#kpi-valor-nota').textContent = sinPrecio ? `${sinPrecio} sin precio cargado` : '';
   $('#kpi-valor-nota').classList.toggle('hidden', !sinPrecio);
+  const usd = $('#kpi-valor-usd');
+  usd.textContent = enUsdSinTc ? 'Cargá el tipo de cambio para sumar los precios en US$'
+    : tcActual() && conPrecio.length ? `≈ US$ ${fmtNum.format(Math.round(total / tcActual()))} · 1 US$ = $ ${fmtPrecio.format(tcActual())}` : '';
+  usd.classList.toggle('hidden', !usd.textContent);
 }
 
 // Para mostrar precios unitarios: "$ 95,00 /rollo"
@@ -709,7 +740,7 @@ function renderTablaInsumos() {
     .map((i) => {
       const e = ESTILO_ESTADO[i.estado_stock];
       const precio = i.ultimo_precio != null
-        ? `${fmtMoneda(i.ultimo_precio)}<span class="text-xs text-slate-500"> /${esc(unidadSingular(i.unidad_medida))}</span>`
+        ? `${fmtMoneda(i.ultimo_precio, i.moneda_precio)}<span class="text-xs text-slate-500"> /${esc(unidadSingular(i.unidad_medida))}</span>`
         : '<span class="text-slate-400">—</span>';
       return `
       <tr class="flex flex-wrap items-center gap-x-3 px-4 py-3 sm:table-row sm:p-0">
@@ -911,6 +942,7 @@ function abrirModal(insumo = null) {
   campos.namedItem('unidad_referencia').value = insumo?.unidad_referencia ?? '';
   unidadAntesDeRollo = insumo?.unidad_medida ?? '';
   insumoEnFicha = insumo;
+  campos.namedItem('moneda_precio').value = insumo?.moneda_precio || 'UYU';
   campos.namedItem('consumo_semanal_manual').value = insumo?.consumo_semanal_manual ?? '';
   campos.namedItem('plazo_reposicion_dias').value = insumo?.plazo_reposicion_dias ?? 7;
   campos.namedItem('dias_seguridad').value = insumo?.dias_seguridad ?? 3;
@@ -941,7 +973,18 @@ modal.addEventListener('close', () => { fechaEditadaAMano = false; });
 function actualizarUnidadPrecio() {
   const u = formInsumo.elements.namedItem('unidad_medida').value.trim();
   $('#i-precio-unidad').textContent = `(por ${unidadSingular(u || 'unidades')})`;
+  // Precio en US$: muestra cuánto es en pesos al tipo de cambio de hoy.
+  const f = formInsumo.elements, moneda = f.namedItem('moneda_precio').value, precio = f.namedItem('ultimo_precio').value;
+  const eq = $('#i-precio-equiv');
+  let texto = '';
+  if (moneda === 'USD') {
+    texto = !tcActual() ? 'Cargá el tipo de cambio para calcular costos en pesos.'
+      : precio !== '' ? `≈ ${fmtMoneda(Number(precio) * tcActual())} al tipo de cambio de hoy (1 US$ = $ ${fmtPrecio.format(tcActual())}).` : '';
+  }
+  eq.textContent = texto;
+  eq.classList.toggle('hidden', !texto);
 }
+['moneda_precio', 'ultimo_precio'].forEach((n) => formInsumo.elements.namedItem(n).addEventListener('input', actualizarUnidadPrecio));
 formInsumo.elements.namedItem('unidad_medida').addEventListener('input', () => { actualizarUnidadPrecio(); pintarRolloFicha(); pintarAlarmaFicha(); });
 
 // Alarma de quiebre en la ficha: muestra cuánto alcanza el stock con el promedio elegido.
@@ -1088,6 +1131,7 @@ function conectarEventos() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'equipos' }, programarRecarga)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'prestamos' }, programarRecarga)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rollos' }, programarRecarga)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tipos_cambio' }, programarRecarga)
     .on('presence', { event: 'sync' }, () => {
       // Una entrada por usuario aunque tenga la app abierta en varios dispositivos.
       estado.conectados = Object.entries(canal.presenceState()).map(([id, sesiones]) => ({
@@ -1229,7 +1273,8 @@ function renderEquipos() {
 }
 
 const componentesDe = (id) => estado.equipos.filter((x) => x.conjunto_id === id).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-const valorConjunto = (e) => (e.valor_compra == null && e.valor_componentes == null ? null : (e.valor_compra || 0) + (e.valor_componentes || 0));
+// Valor total del conjunto en pesos (lo que está en US$ se convierte al tipo de cambio vigente).
+const valorConjunto = (e) => (e.valor_compra == null && e.valor_componentes == null ? null : (e.valor_compra_uyu ?? convertir(e.valor_compra, e.moneda_valor) ?? 0) + (e.valor_componentes || 0));
 
 function filaEquipo(e) {
   const st = ESTILO_EQUIPO[e.estado] || ESTILO_EQUIPO['De baja'];
@@ -1318,6 +1363,7 @@ function abrirEquipoForm(e = null) {
   $('#eq-modal-titulo').textContent = e ? 'Editar equipo' : 'Nuevo equipo';
   const f = formEquipo.elements;
   f.namedItem('editando_id').value = e?.id ?? '';
+  formEquipo.elements.namedItem('moneda_valor').value = e?.moneda_valor || 'UYU';
   for (const c of ['codigo_serie', 'activo_fijo_utec', 'activo_fijo_n', 'nombre', 'categoria', 'marca_modelo', 'ubicacion', 'fecha_adquisicion', 'valor_compra', 'observaciones'])
     f.namedItem(c).value = e?.[c] ?? '';
   const prestado = e?.estado === 'Prestado';
@@ -1476,6 +1522,7 @@ formEquipo.addEventListener('submit', (ev) => {
     ubicacion: t(f.ubicacion) || null,
     fecha_adquisicion: t(f.fecha_adquisicion) || null,
     valor_compra: t(f.valor_compra) === '' ? null : Number(f.valor_compra),
+    moneda_valor: f.moneda_valor === 'USD' ? 'USD' : 'UYU',
     observaciones: t(f.observaciones) || null,
   };
   const actual = id ? buscarEquipo(id) : null;
@@ -1630,6 +1677,7 @@ function abrirRollos(insumoId) {
   formRollos.reset();
   $('#ro-cantidad').value = 1;
   $('#ro-peso').value = i?.peso_bruto_rollo_kg ?? '';
+  $('#ro-moneda').value = i?.moneda_precio || 'UYU';
   mostrarError($('#ro-error'), '');
   pintarRollos();
   modalRollos.showModal();
@@ -1656,7 +1704,7 @@ function pintarRollos() {
         <span class="ml-auto whitespace-nowrap text-right text-sm tabular-nums">${r.estado === 'Terminado' ? '—' : `${fmtKg(r.saldo)} <span class="text-xs text-slate-500">kg</span>${i.contenido_por_rollo ? `<span class="block text-[11px] text-slate-500">${equivalencias(i, r.saldo).split(' · ')[1]}</span>` : ''}`}</span>
       </div>
       ${r.estado === 'Terminado' ? '' : `<div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100"><div class="h-full rounded-full" style="width:${pct.toFixed(1)}%;background:${pct <= 15 ? '#f59e0b' : '#0090c0'}"></div></div>`}
-      <p class="mt-1 text-[11px] text-slate-500">Pesa ${fmtKg(r.peso_actual_kg)} kg · recibido ${fmtDia(r.recibido_en.slice(0, 10))}${r.precio != null ? ` · ${fmtMoneda(r.precio)}` : ''} · ${r.usos ? plural(r.usos, 'uso', 'usos') : 'sin usar'}${r.terminado_en ? ` · terminado ${fmtDia(r.terminado_en.slice(0, 10))}` : ''}</p>
+      <p class="mt-1 text-[11px] text-slate-500">Pesa ${fmtKg(r.peso_actual_kg)} kg · recibido ${fmtDia(r.recibido_en.slice(0, 10))}${r.precio != null ? ` · ${fmtMoneda(r.precio, r.moneda)}` : ''} · ${r.usos ? plural(r.usos, 'uso', 'usos') : 'sin usar'}${r.terminado_en ? ` · terminado ${fmtDia(r.terminado_en.slice(0, 10))}` : ''}</p>
     </li>`;
   };
   const lista = [...activos, ...(verTerminados ? terminados : [])];
@@ -1673,10 +1721,10 @@ function calcularEntradaRollos() {
   const ref = i.contenido_por_rollo ? ` (${equivalencias(i, c * n).split(' · ')[1]})` : '';
   $('#ro-calculo').textContent = n > 0 && c > 0
     ? `Suma ${fmtKg(c * n)} kg netos${ref} · ${fmtKg(c)} kg por rollo` +
-      (precio !== '' ? ` · ${fmtMoneda(Number(precio) / c)} por kg` : '') + '. Los códigos se generan solos.'
+      (precio !== '' ? ` · ${fmtMoneda(Number(precio) / c, $('#ro-moneda').value)} por kg` : '') + '. Los códigos se generan solos.'
     : 'Cargá la cantidad de rollos y el peso bruto de cada uno.';
 }
-['#ro-cantidad', '#ro-peso', '#ro-precio'].forEach((x) => $(x).addEventListener('input', calcularEntradaRollos));
+['#ro-cantidad', '#ro-peso', '#ro-precio', '#ro-moneda'].forEach((x) => $(x).addEventListener('input', calcularEntradaRollos));
 $('#ro-ver-terminados').addEventListener('change', pintarRollos);
 $$('[data-cerrar]', modalRollos).forEach((b) => b.addEventListener('click', () => modalRollos.close()));
 modalRollos.addEventListener('click', (ev) => { if (ev.target === modalRollos) modalRollos.close(); });
@@ -1692,7 +1740,7 @@ formRollos.addEventListener('submit', async (ev) => {
   const boton = formRollos.querySelector('[type=submit]');
   boton.disabled = true;
   try {
-    const ids = await datos.recibirRollos(Array.from({ length: n }, () => ({ insumo_id: i.id, peso_inicial_kg: peso, precio })));
+    const ids = await datos.recibirRollos(Array.from({ length: n }, () => ({ insumo_id: i.id, peso_inicial_kg: peso, precio, moneda: $('#ro-moneda').value === 'USD' ? 'USD' : 'UYU' })));
     mostrarError($('#ro-error'), '');
     await cargarDatos();
     rollosRecienRecibidos = estado.rollos.filter((r) => ids.includes(r.id));
@@ -1775,7 +1823,7 @@ function renderUsuarios() {
 const ETIQUETAS = { codigo: 'Código', nombre: 'Nombre', categoria: 'Categoría', stock_actual: 'Stock',
   stock_minimo: 'Mínimo', unidad_medida: 'Unidad', proveedor: 'Proveedor', ultimo_precio: 'Últ. precio', fecha_ultimo_precio: 'Fecha precio',
   codigo_serie: 'N.º de serie', activo_fijo_utec: 'Activo fijo UTEC', activo_fijo_n: 'Activo fijo N', es_conjunto: 'Es conjunto', conjunto_id: 'Conjunto', marca_modelo: 'Marca/modelo', ubicacion: 'Ubicación', estado: 'Estado',
-  fecha_adquisicion: 'Fecha compra', valor_compra: 'Valor', observaciones: 'Observaciones',
+  fecha_adquisicion: 'Fecha compra', valor_compra: 'Valor', observaciones: 'Observaciones', moneda_precio: 'Moneda del precio', moneda_valor: 'Moneda del valor',
   control_por_rollo: 'Control por rollo', tara_kg: 'Cono vacío (kg)', peso_bruto_rollo_kg: 'Rollo nuevo (kg)', contenido_por_rollo: 'Referencia por rollo', unidad_referencia: 'Unidad de referencia',
   consumo_semanal_manual: 'Consumo semanal', fuente_promedio: 'Promedio', plazo_reposicion_dias: 'Demora proveedor (días)', dias_seguridad: 'Margen (días)' };
 
@@ -1785,7 +1833,8 @@ function valorLegible(campo, v) {
   if (campo === 'fuente_promedio') return v === 'calculado' ? 'Calculado' : 'Manual';
   if (['consumo_semanal_manual', 'tara_kg', 'peso_bruto_rollo_kg', 'contenido_por_rollo'].includes(campo) && v != null && v !== '') return fmtNum.format(Number(v));
   if (v == null || v === '') return '—';
-  if (campo === 'ultimo_precio' || campo === 'valor_compra') return fmtMoneda(Number(v));
+  if (campo === 'ultimo_precio' || campo === 'valor_compra') return fmtPrecio.format(Number(v));
+  if (campo === 'moneda_precio' || campo === 'moneda_valor') return SIMBOLO[v] || v;
   if (campo === 'stock_actual' || campo === 'stock_minimo') return fmtNum.format(Number(v));
   if (campo === 'fecha_ultimo_precio' || campo === 'fecha_adquisicion') return fmtDia(v);
   return String(v);
@@ -1941,6 +1990,7 @@ const COLOR_DATO = '#0090c0', COLOR_DATO_FUERTE = '#005a78', COLOR_OTROS = '#cbd
 const rep = {
   periodo: leerLocal('rep-periodo') || '30',
   medida: leerLocal('rep-medida') === 'retiros' ? 'retiros' : 'costo',
+  moneda: leerLocal('rep-moneda') === 'USD' ? 'USD' : 'UYU',
   desde: '', hasta: '', categoria: '',
   consumos: [], anteriores: [], prestamos: [],
   pedido: 0, cargadoEn: 0,
@@ -1954,7 +2004,10 @@ const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'o
 const MESES_LARGOS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const diaCorto = (iso) => `${Number(iso.slice(8))}/${Number(iso.slice(5, 7))}`;
 const fmtEntero = new Intl.NumberFormat('es-UY', { maximumFractionDigits: 0 });
-const fmtPesos = (n) => `$ ${fmtEntero.format(Math.round(n || 0))}`;
+// Montos del reporte en la moneda elegida ($ redondeado; US$ con centavos si es chico).
+const fmtPesos = (n) => (rep.moneda === 'USD'
+  ? `US$ ${(Math.abs(n || 0) < 1000 ? fmtPrecio : fmtEntero).format(Math.abs(n || 0) < 1000 ? (n || 0) : Math.round(n || 0))}`
+  : `$ ${fmtEntero.format(Math.round(n || 0))}`);
 const fmtCompacto = (n) => (n >= 1e6 ? `${fmtNum.format(+(n / 1e6).toFixed(1))} M` : n >= 1e3 ? `${fmtNum.format(+(n / 1e3).toFixed(1))} k` : fmtEntero.format(n));
 const plural = (n, uno, varios) => `${fmtNum.format(n)} ${n === 1 ? uno : varios}`;
 
@@ -1985,7 +2038,10 @@ const entreFechas = (q, campo, desde, hasta) =>
 
 datos.consumosEntre = async (desde, hasta) => (await traerTodo(() =>
   entreFechas(sb.from('v_consumos').select('*'), 'fecha_hora', desde, hasta).order('fecha_hora').order('id'),
-)).map((c) => ({ ...c, cantidad: aNumero(c.cantidad), precio_unitario: aNumero(c.precio_unitario), costo: aNumero(c.costo) }));
+)).map((c) => ({ ...c, cantidad: aNumero(c.cantidad), precio_unitario: aNumero(c.precio_unitario), costo_uyu: aNumero(c.costo), costo_usd: aNumero(c.costo_usd),
+  precio_original: aNumero(c.precio_original), tipo_cambio: aNumero(c.tipo_cambio) }));
+// El costo de cada consumo en la moneda elegida (US$ con el tipo de cambio de ese día).
+const enMoneda = (c) => ({ ...c, costo: rep.moneda === 'USD' ? c.costo_usd : c.costo_uyu });
 datos.prestamosEntre = async (desde, hasta) => (await traerTodo(() =>
   entreFechas(sb.from('v_prestamos').select('*'), 'fecha_retiro', desde, hasta).order('fecha_retiro').order('id'),
 )).map((p) => ({ ...p, dias: aNumero(p.dias) }));
@@ -1998,6 +2054,8 @@ function prepararFiltrosReporte() {
   $('#r-desde').value = rep.desde;
   $('#r-hasta').value = rep.hasta;
   $$('#r-medida [data-medida]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.medida === rep.medida)));
+  $$('#r-moneda [data-moneda]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.moneda === rep.moneda)));
+  $('#r-medida [data-medida="costo"]').textContent = `Costo (${SIMBOLO[rep.moneda]})`;
 }
 
 async function cargarReporte() {
@@ -2057,8 +2115,8 @@ function renderReporte() {
   if (cats.includes(rep.categoria)) $('#r-categoria').value = rep.categoria; else rep.categoria = '';
 
   const filtro = (c) => !rep.categoria || c.categoria === rep.categoria;
-  const consumos = rep.consumos.filter(filtro);
-  const anteriores = rep.anteriores.filter(filtro);
+  const consumos = rep.consumos.filter(filtro).map(enMoneda);
+  const anteriores = rep.anteriores.filter(filtro).map(enMoneda);
   const dias = diasEntre(rep.desde, rep.hasta);
   $('#r-subtitulo').textContent = `${fmtDia(rep.desde)} al ${fmtDia(rep.hasta)} · ${plural(dias, 'día', 'días')}${rep.categoria ? ` · ${rep.categoria}` : ''}`;
 
@@ -2201,7 +2259,7 @@ function dibujarColumnas(cont, cubetas) {
   const valores = cubetas.map((b) => (rep.medida === 'costo' ? b.costo : b.retiros));
   const ticks = escalaRedonda(Math.max(0, ...valores), 4, rep.medida === 'retiros');
   const tope = ticks[ticks.length - 1] || 1;
-  const textoEje = (v) => (rep.medida === 'costo' ? `$ ${fmtCompacto(v)}` : fmtEntero.format(v));
+  const textoEje = (v) => (rep.medida === 'costo' ? `${SIMBOLO[rep.moneda]} ${fmtCompacto(v)}` : fmtEntero.format(v));
   const mIzq = Math.max(...ticks.map((t) => textoEje(t).length)) * 6.4 + 10;
   const m = { t: 10, r: 6, b: 24, l: mIzq };
   const w = ancho - m.l - m.r, h = alto - m.t - m.b;
@@ -2237,7 +2295,8 @@ function renderProyeccion(consumos, dias, filtro) {
     const porDia = cant / dias;
     const alcanza = porDia > 0 ? i.stock_actual / porDia : null;
     const comprar = Math.max(0, Math.ceil(porDia * 30 + i.stock_minimo - i.stock_actual - 1e-9));
-    return { i, cant, porDia, alcanza, comprar, costoCompra: i.ultimo_precio != null ? comprar * i.ultimo_precio : null };
+    const precio = convertir(i.ultimo_precio, i.moneda_precio, rep.moneda);
+    return { i, cant, porDia, alcanza, comprar, costoCompra: precio != null ? comprar * precio : null };
   }).filter((f) => f.cant > 0 || f.i.estado_stock !== 'ok');
   const orden = (f) => (f.i.stock_actual <= 0 ? -1 : f.alcanza ?? (f.i.estado_stock !== 'ok' ? 1e6 : 1e7));
   filas.sort((a, b) => orden(a) - orden(b) || a.i.nombre.localeCompare(b.i.nombre, 'es'));
@@ -2299,7 +2358,8 @@ function renderSinConsumo(consumos, filtro) {
   const usados = new Set(consumos.map((c) => c.insumo_id));
   const quietos = estado.insumos.filter((i) => filtro(i) && !usados.has(i.id) && i.stock_actual > 0)
     .sort((a, b) => (b.valor_stock || 0) - (a.valor_stock || 0));
-  const valor = quietos.reduce((s, i) => s + (i.valor_stock || 0), 0);
+  const valorDe = (i) => (rep.moneda === 'USD' ? i.valor_stock_usd : i.valor_stock);
+  const valor = quietos.reduce((s, i) => s + (valorDe(i) || 0), 0);
   $('#r-sin-consumo-nota').textContent = quietos.length
     ? `${plural(quietos.length, 'insumo', 'insumos')} con stock que no se usaron · ${fmtPesos(valor)} inmovilizados`
     : 'Todos los insumos con stock tuvieron consumo.';
@@ -2307,7 +2367,7 @@ function renderSinConsumo(consumos, filtro) {
   $('#r-sin-consumo').innerHTML = quietos.slice(0, max).map((i) => `
     <li class="flex items-center gap-3 px-4 py-2">
       <div class="min-w-0 flex-1"><p class="truncate text-sm text-slate-800">${esc(i.nombre)}</p><p class="text-[11px] text-slate-500">${fmtNum.format(i.stock_actual)} ${esc(i.unidad_medida)} · ${esc(i.categoria)}</p></div>
-      <span class="whitespace-nowrap text-xs tabular-nums text-slate-700">${i.valor_stock != null ? fmtPesos(i.valor_stock) : 'sin precio'}</span>
+      <span class="whitespace-nowrap text-xs tabular-nums text-slate-700">${valorDe(i) != null ? fmtPesos(valorDe(i)) : 'sin precio'}</span>
     </li>`).join('') + (quietos.length > max ? `<li class="px-4 py-2 text-xs text-slate-500">y ${quietos.length - max} más (ver en Excel)</li>` : '');
 }
 
@@ -2360,6 +2420,15 @@ $('#r-periodo').addEventListener('change', (ev) => {
   if (rep.desde && rep.hasta) cargarReporte();
 }));
 $('#r-categoria').addEventListener('change', (ev) => { rep.categoria = ev.target.value; renderReporte(); });
+$('#r-moneda').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-moneda]');
+  if (!b || b.dataset.moneda === rep.moneda) return;
+  rep.moneda = b.dataset.moneda;
+  guardarLocal('rep-moneda', rep.moneda);
+  if (rep.moneda === 'USD' && !tcActual()) toast('Todavía no hay tipo de cambio cargado: cargalo para ver los costos en US$.');
+  prepararFiltrosReporte();
+  renderReporte();
+});
 $('#r-medida').addEventListener('click', (ev) => {
   const b = ev.target.closest('[data-medida]');
   if (!b || b.dataset.medida === rep.medida) return;
@@ -2413,13 +2482,15 @@ $('#btn-excel').addEventListener('click', async (ev) => {
   boton.disabled = true;
   try {
     const XLSX = await cargarXLSX();
-    const PESOS = '"$" #,##0.00', FECHA_HORA = 'dd/mm/yyyy hh:mm', FECHA = 'dd/mm/yyyy', NUM = '#,##0.###';
+    const PESOS = '"$" #,##0.00', DOLARES = '"US$" #,##0.00', FECHA_HORA = 'dd/mm/yyyy hh:mm', FECHA = 'dd/mm/yyyy', NUM = '#,##0.###';
+    const MON = rep.moneda === 'USD' ? DOLARES : PESOS, SIM = SIMBOLO[rep.moneda];
     const filtro = (c) => !rep.categoria || c.categoria === rep.categoria;
-    const consumos = rep.consumos.filter(filtro);
+    const consumos = rep.consumos.filter(filtro).map(enMoneda);
     const dias = diasEntre(rep.desde, rep.hasta);
     const libro = XLSX.utils.book_new();
 
-    const costo = consumos.reduce((s, c) => s + (c.costo || 0), 0);
+    const costo = consumos.reduce((s, c) => s + (c.costo_uyu || 0), 0);
+    const costoUsd = consumos.reduce((s, c) => s + (c.costo_usd || 0), 0);
     const resumen = XLSX.utils.aoa_to_sheet([
       ['Reporte de insumos y equipos — Laboratorio de Logística'],
       [],
@@ -2428,50 +2499,56 @@ $('#btn-excel').addEventListener('click', async (ev) => {
       ['Generado', new Date().toLocaleString('es-UY')],
       ['Generado por', nombreDe(estado.usuario?.id)],
       [],
-      ['Costo de consumos', costo],
+      ['Costo de consumos ($)', costo],
+      ['Costo de consumos (US$)', costoUsd],
+      ['Tipo de cambio vigente (1 US$ = $)', tcActual()],
       ['Retiros registrados', consumos.length],
-      ['Retiros sin precio cargado', consumos.filter((c) => c.costo == null).length],
+      ['Retiros sin precio cargado', consumos.filter((c) => c.costo_uyu == null).length],
       ['Insumos distintos usados', new Set(consumos.map((c) => c.insumo_id)).size],
       ['Préstamos de equipos', rep.prestamos.length],
       ['Préstamos fuera de plazo', rep.prestamos.filter((p) => p.fuera_de_plazo).length],
       ['Devoluciones con daño', rep.prestamos.filter((p) => p.condicion_devolucion === 'Con daño').length],
       [],
-      ['El costo usa el precio unitario vigente al momento de cada retiro.'],
+      ['El costo usa el precio vigente al momento de cada retiro; los precios en US$ se convierten con el tipo de cambio de ese día.'],
     ]);
     resumen.B8.z = PESOS;
+    resumen.B9.z = DOLARES;
+    if (resumen.B10) resumen.B10.z = '#,##0.00##';
     resumen['!cols'] = [{ wch: 30 }, { wch: 36 }];
     XLSX.utils.book_append_sheet(libro, resumen, 'Resumen');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Fecha', 'Código', 'Insumo', 'Categoría', 'Cantidad', 'Unidad', 'Precio unitario', 'Costo', 'Práctica / motivo', 'Retiró', 'Registró', 'Rollo', 'Peso antes (kg)', 'Peso después (kg)'],
-      consumos.map((c) => [serialExcel(c.fecha_hora), c.codigo || '', c.insumo, c.categoria, c.cantidad, c.unidad_medida, c.precio_unitario, c.costo, c.practica_motivo, c.responsable, c.registrado_por || '',
-        c.rollo_codigo || '', aNumero(c.peso_antes_kg), aNumero(c.peso_despues_kg)]),
-      { 0: FECHA_HORA, 4: NUM, 6: PESOS, 7: PESOS, 12: '0.000', 13: '0.000' }, [16, 12, 30, 16, 10, 10, 14, 14, 28, 20, 24, 14, 12, 12]), 'Consumos');
+      ['Fecha', 'Código', 'Insumo', 'Categoría', 'Cantidad', 'Unidad', 'Precio unitario ($)', 'Costo ($)', 'Práctica / motivo', 'Retiró', 'Registró', 'Rollo', 'Peso antes (kg)', 'Peso después (kg)',
+        'Costo (US$)', 'Moneda del precio', 'Precio original', 'Tipo de cambio'],
+      consumos.map((c) => [serialExcel(c.fecha_hora), c.codigo || '', c.insumo, c.categoria, c.cantidad, c.unidad_medida, c.precio_unitario, c.costo_uyu, c.practica_motivo, c.responsable, c.registrado_por || '',
+        c.rollo_codigo || '', aNumero(c.peso_antes_kg), aNumero(c.peso_despues_kg), c.costo_usd, SIMBOLO[c.moneda_precio] || '', c.precio_original, c.tipo_cambio]),
+      { 0: FECHA_HORA, 4: NUM, 6: PESOS, 7: PESOS, 12: '0.000', 13: '0.000', 14: DOLARES, 16: '#,##0.00##', 17: '#,##0.00##' },
+      [16, 12, 30, 16, 10, 10, 14, 14, 28, 20, 24, 14, 12, 12, 12, 10, 12, 12]), 'Consumos');
 
     if (estado.rollos.length) {
       const insumoDe = new Map(estado.insumos.map((i) => [i.id, i]));
       XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-        ['Rollo', 'Insumo', 'Estado', 'Queda (kg)', 'Equivalente', 'Neto inicial (kg)', 'Peso bruto inicial (kg)', 'Peso actual (kg)', 'Cono (kg)', 'Precio', 'Usos', 'Recibido', 'Terminado'],
+        ['Rollo', 'Insumo', 'Estado', 'Queda (kg)', 'Equivalente', 'Neto inicial (kg)', 'Peso bruto inicial (kg)', 'Peso actual (kg)', 'Cono (kg)', 'Precio', 'Usos', 'Recibido', 'Terminado', 'Moneda'],
         estado.rollos.filter((r) => filtro({ categoria: r.categoria })).map((r) => [r.codigo, r.insumo, r.estado, r.saldo, r.estado === 'Terminado' ? '' : equivalencias(insumoDe.get(r.insumo_id), r.saldo),
-          r.contenido_inicial, r.peso_inicial_kg, r.peso_actual_kg, r.tara_kg, r.precio, r.usos, serialExcel(r.recibido_en), serialExcel(r.terminado_en)]),
-        { 3: '0.000', 5: '0.000', 6: '0.000', 7: '0.000', 8: '0.000', 9: PESOS, 11: FECHA_HORA, 12: FECHA_HORA }, [16, 28, 11, 10, 20, 12, 14, 12, 10, 12, 7, 16, 16]), 'Rollos');
+          r.contenido_inicial, r.peso_inicial_kg, r.peso_actual_kg, r.tara_kg, r.precio, r.usos, serialExcel(r.recibido_en), serialExcel(r.terminado_en), r.precio == null ? '' : SIMBOLO[r.moneda] || '$']),
+        { 3: '0.000', 5: '0.000', 6: '0.000', 7: '0.000', 8: '0.000', 9: PESOS, 11: FECHA_HORA, 12: FECHA_HORA }, [16, 28, 11, 10, 20, 12, 14, 12, 10, 12, 7, 16, 16, 8]), 'Rollos');
     }
 
     const porInsumo = agrupar(consumos, (c) => c.insumo_id, (c) => ({ codigo: c.codigo, nombre: c.insumo, categoria: c.categoria, unidad: c.unidad_medida }));
     const stockDe = new Map(estado.insumos.map((i) => [i.id, i]));
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Código', 'Insumo', 'Categoría', 'Unidad', 'Cantidad consumida', 'Retiros', 'Costo', 'Stock actual', 'Días que alcanza'],
+      ['Código', 'Insumo', 'Categoría', 'Unidad', 'Cantidad consumida', 'Retiros', `Costo (${SIM})`, 'Stock actual', 'Días que alcanza'],
       porInsumo.sort((a, b) => b.costo - a.costo).map((g) => {
         const i = stockDe.get(g.clave);
         const porDia = g.cantidad / dias;
         return [g.codigo || '', g.nombre, g.categoria, g.unidad, g.cantidad, g.retiros, g.costo, i?.stock_actual ?? null, i && porDia > 0 ? Math.floor(i.stock_actual / porDia) : null];
       }),
-      { 4: NUM, 6: PESOS, 7: NUM }, [12, 30, 16, 10, 12, 9, 14, 12, 12]), 'Por insumo');
+      { 4: NUM, 6: MON, 7: NUM }, [12, 30, 16, 10, 12, 9, 14, 12, 12]), 'Por insumo');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Práctica / motivo', 'Retiros', 'Costo'],
+      ['Práctica / motivo', 'Retiros', `Costo (${SIM})`],
       agrupar(consumos, (c) => c.practica_motivo.trim()).sort((a, b) => b.costo - a.costo).map((g) => [g.clave, g.retiros, g.costo]),
-      { 2: PESOS }, [36, 10, 14]), 'Por práctica');
+      { 2: MON }, [36, 10, 14]), 'Por práctica');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
       ['Retiro', 'N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Retiró', 'Contacto', 'Práctica / motivo', 'Devolución prevista', 'Devuelto', 'Estado', 'Condición', 'Fuera de plazo', 'Días', 'Obs. retiro', 'Obs. devolución', 'Registró', 'Recibió'],
@@ -2481,20 +2558,21 @@ $('#btn-excel').addEventListener('click', async (ev) => {
       { 0: FECHA_HORA, 9: FECHA, 10: FECHA_HORA, 14: '0.0' }, [16, 12, 14, 14, 26, 14, 20, 16, 24, 12, 16, 10, 10, 8, 7, 24, 24, 22, 22]), 'Préstamos');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['Código', 'Insumo', 'Categoría', 'Stock', 'Mínimo', 'Unidad', 'Estado', 'Proveedor', 'Último precio', 'Fecha precio', 'Valor en stock',
-        'Consumo semanal', 'Promedio', 'Días que alcanza', 'Demora proveedor (días)', 'Punto de pedido', 'Alarma'],
+      ['Código', 'Insumo', 'Categoría', 'Stock', 'Mínimo', 'Unidad', 'Estado', 'Proveedor', 'Último precio', 'Fecha precio', 'Valor en stock ($)',
+        'Consumo semanal', 'Promedio', 'Días que alcanza', 'Demora proveedor (días)', 'Punto de pedido', 'Alarma', 'Moneda del precio', 'Valor en stock (US$)'],
       estado.insumos.filter(filtro).map((i) => [i.codigo || '', i.nombre, i.categoria, i.stock_actual, i.stock_minimo, i.unidad_medida,
         ESTILO_ESTADO[i.estado_stock]?.texto || i.estado_stock, i.proveedor || '', i.ultimo_precio, serialExcel(i.fecha_ultimo_precio), i.valor_stock,
         i.consumo_semanal, i.consumo_semanal == null ? '' : i.fuente_promedio === 'calculado' ? 'Calculado' : 'Manual', i.dias_cobertura,
-        i.plazo_reposicion_dias, i.punto_pedido, ESTILO_QUIEBRE[i.alerta_quiebre]?.texto || '']),
-      { 3: NUM, 4: NUM, 8: PESOS, 9: FECHA, 10: PESOS, 11: NUM, 13: '0.0', 15: NUM }, [12, 30, 16, 10, 10, 10, 12, 20, 14, 12, 14, 12, 11, 12, 12, 12, 13]), 'Stock actual');
+        i.plazo_reposicion_dias, i.punto_pedido, ESTILO_QUIEBRE[i.alerta_quiebre]?.texto || '', SIMBOLO[i.moneda_precio] || '$', i.valor_stock_usd]),
+      { 3: NUM, 4: NUM, 8: '#,##0.00##', 9: FECHA, 10: PESOS, 11: NUM, 13: '0.0', 15: NUM, 18: DOLARES }, [12, 30, 16, 10, 10, 10, 12, 20, 14, 12, 14, 12, 11, 12, 12, 12, 13, 10, 14]), 'Stock actual');
 
     XLSX.utils.book_append_sheet(libro, hoja(XLSX,
-      ['N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones', 'Tipo', 'Conjunto'],
+      ['N.º de serie', 'Activo fijo UTEC', 'Activo fijo N', 'Equipo', 'Categoría', 'Marca / modelo', 'Ubicación', 'Estado', 'Prestado a', 'Devolución prevista', 'Fecha de compra', 'Valor de compra', 'Observaciones', 'Tipo', 'Conjunto', 'Moneda del valor', 'Valor ($)'],
       estado.equipos.map((e) => [e.codigo_serie, e.activo_fijo_utec || '', e.activo_fijo_n || '', e.nombre, e.categoria, e.marca_modelo || '', e.ubicacion || '', e.estado, e.prestado_a || '',
         serialExcel(e.prestamo_hasta), serialExcel(e.fecha_adquisicion), e.valor_compra, e.observaciones || '',
-        e.es_conjunto ? `Conjunto (${e.componentes || 0} componentes)` : e.conjunto_id ? 'Componente' : 'Equipo', e.conjunto_nombre || '']),
-      { 9: FECHA, 10: FECHA, 11: PESOS }, [14, 16, 14, 26, 14, 20, 16, 14, 20, 12, 12, 14, 30, 22, 24]), 'Equipos');
+        e.es_conjunto ? `Conjunto (${e.componentes || 0} componentes)` : e.conjunto_id ? 'Componente' : 'Equipo', e.conjunto_nombre || '',
+        e.valor_compra == null ? '' : SIMBOLO[e.moneda_valor] || '$', e.valor_compra_uyu ?? convertir(e.valor_compra, e.moneda_valor)]),
+      { 9: FECHA, 10: FECHA, 11: '#,##0.00', 16: PESOS }, [14, 16, 14, 26, 14, 20, 16, 14, 20, 12, 12, 14, 30, 22, 24, 10, 14]), 'Equipos');
 
     XLSX.writeFile(libro, `reporte-insumos_${rep.desde}_a_${rep.hasta}.xlsx`, { compression: true });
     toast('Excel descargado.');
@@ -2605,3 +2683,54 @@ $('#btn-olvide').addEventListener('click', async () => {
   if (data.session) iniciarApp(data.session);
   else mostrarLogin();
 })();
+
+
+// ---------- Tipo de cambio (US$ → $) ----------
+const modalTc = $('#modal-tc');
+const formTc = $('#form-tc');
+function renderTipoCambio() {
+  const t = estado.tiposCambio[0];
+  const texto = t ? `1 US$ = $ ${fmtPrecio.format(t.usd_uyu)} · ${fmtDia(t.fecha).slice(0, 5)}` : 'Cargar tipo de cambio';
+  $$('[data-tc-texto]').forEach((el) => (el.textContent = texto));
+  $('#tc-actual').textContent = t ? `Vigente: 1 US$ = $ ${fmtPrecio.format(t.usd_uyu)} (${fmtDia(t.fecha)}${t.fuente ? ' · ' + t.fuente : ''})` : 'Todavía no hay ninguna cotización cargada.';
+  $('#tc-historial').innerHTML = estado.tiposCambio.length
+    ? estado.tiposCambio.map((x) => `<li class="flex justify-between px-3 py-1.5"><span>${esc(fmtDia(x.fecha))}${x.fuente ? ` <span class="text-xs text-slate-400">${esc(x.fuente)}</span>` : ''}</span><span class="tabular-nums">$ ${fmtPrecio.format(x.usd_uyu)}</span></li>`).join('')
+    : '<li class="px-3 py-2 text-slate-500">Sin cotizaciones.</li>';
+}
+function abrirTipoCambio() {
+  renderTipoCambio();
+  $('#tc-valor').value = '';
+  $('#tc-fecha').value = hoyISO();
+  $('#tc-fecha').max = hoyISO();
+  $('#tc-error').classList.add('hidden');
+  modalTc.showModal();
+  $('#tc-valor').focus();
+}
+document.addEventListener('click', (ev) => {
+  if (ev.target.closest('[data-abrir-tc]')) abrirTipoCambio();
+});
+$$('[data-cerrar]', modalTc).forEach((b) => b.addEventListener('click', () => modalTc.close()));
+formTc.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const err = $('#tc-error');
+  const valor = Number($('#tc-valor').value), fecha = $('#tc-fecha').value;
+  const fallo = (m) => { err.textContent = m; err.classList.remove('hidden'); };
+  if (!(valor > 0)) return fallo('Ingresá cuántos pesos vale 1 dólar.');
+  if (valor < 10 || valor > 200) return fallo('Revisá el valor: 1 US$ suele valer entre $ 10 y $ 200.');
+  if (!fecha) return fallo('Indicá la fecha de la cotización.');
+  if (fecha > hoyISO()) return fallo('La fecha de la cotización no puede ser futura.');
+  const btn = $('button[type="submit"]', formTc);
+  btn.disabled = true;
+  try {
+    await datos.agregarTipoCambio({ usd_uyu: valor, fecha, fuente: $('#tc-fuente').value.trim() || null });
+    estado.tiposCambio = await datos.tiposCambio();
+    modalTc.close();
+    toast(`Tipo de cambio guardado: 1 US$ = $ ${fmtPrecio.format(valor)}`);
+    renderTodo();
+    if (vistaActual() === 'reportes') cargarReporte();
+  } catch (e) {
+    fallo(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
