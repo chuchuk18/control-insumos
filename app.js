@@ -54,6 +54,13 @@ function traducirError(error) {
   if (msg.includes('ESTADO_PRESTADO_MANUAL')) return new Error('El estado "Prestado" se maneja con préstamos y devoluciones.');
   const det = (codigo) => (msg.match(new RegExp(codigo + ':([^\\n]+)')) || [])[1]?.trim();
   const kg = (codigo) => { const v = Number(det(codigo)); return Number.isFinite(v) ? `${fmtKg(v)} kg` : ''; };
+  if (msg.includes('SOLO_ADMIN') || /row-level security|permission denied/i.test(msg)) return new Error('Tu usuario no tiene permiso para hacer esto. Pedíselo a un administrador.');
+  if (msg.includes('NO_PENDIENTE')) return new Error('Ese registro ya fue revisado.');
+  if (msg.includes('YA_ANULADO')) return new Error('Ese registro ya estaba anulado.');
+  if (msg.includes('FALTA_MOTIVO')) return new Error('Escribí el motivo de la anulación.');
+  if (msg.includes('ULTIMO_ADMIN')) return new Error('Tiene que quedar al menos un administrador activo.');
+  if (msg.includes('NO_A_SI_MISMO')) return new Error('No podés desactivar tu propio usuario.');
+  if (msg.includes('PRESTAMO_ANULADO')) return new Error('Ese préstamo fue anulado.');
   if (msg.includes('FECHA_FUTURA')) return new Error('La fecha de la cotización no puede ser futura.');
   if (msg.includes('ROLLO_EN_KG')) return new Error('Los insumos que se controlan por rollo se llevan en kg (lo que mide la balanza).');
   if (msg.includes('STOCK_POR_ROLLOS')) return new Error('El stock de este insumo se calcula con sus rollos: registrá una entrada de rollos o un consumo.');
@@ -190,8 +197,49 @@ const datos = {
     const { error } = await sb.from('prestamos').update(campos).eq('id', id);
     if (error) throw traducirError(error);
   },
+  async pendientes() {
+    const [c, p] = await Promise.all([
+      sb.from('movimientos_insumos').select('*, insumos(nombre, unidad_medida, codigo)').eq('revision', 'pendiente').order('fecha_hora').limit(100),
+      sb.from('prestamos').select('*, equipos(nombre, codigo_serie)').eq('revision', 'pendiente').order('fecha_retiro').limit(100),
+    ]);
+    if (c.error) throw traducirError(c.error);
+    if (p.error) throw traducirError(p.error);
+    return [
+      ...c.data.map((m) => ({ tipo: 'consumo', id: m.id, fecha: m.fecha_hora, usuario_id: m.usuario_id, titulo: m.insumos?.nombre ?? '(insumo)',
+        detalle: `−${fmtNum.format(aNumero(m.cantidad_retirada))} ${m.insumos?.unidad_medida ?? ''} · ${m.practica_motivo} · retiró ${m.responsable}` })),
+      ...p.data.map((x) => ({ tipo: 'prestamo', id: x.id, fecha: x.fecha_retiro, usuario_id: x.registrado_por, titulo: `Préstamo: ${x.equipos?.nombre ?? '(equipo)'}`,
+        detalle: `a ${x.usuario_responsable} · ${x.practica_motivo}${x.estado === 'Devuelto' ? ' · ya devuelto' : ''}` })),
+    ].sort((a1, b1) => String(a1.fecha).localeCompare(String(b1.fecha)));
+  },
+  async aprobar(tipo, id) {
+    const { error } = await sb.rpc('aprobar_registro', { p_tipo: tipo, p_id: id });
+    if (error) throw traducirError(error);
+  },
+  async anular(tipo, id, motivo) {
+    const { error } = await sb.rpc('anular_registro', { p_tipo: tipo, p_id: id, p_motivo: motivo });
+    if (error) throw traducirError(error);
+  },
+  async cambiarRol(usuario, rol) {
+    const { error } = await sb.rpc('cambiar_rol', { p_usuario: usuario, p_rol: rol });
+    if (error) throw traducirError(error);
+  },
+  async activarUsuario(usuario, activo) {
+    const { error } = await sb.rpc('activar_usuario', { p_usuario: usuario, p_activo: activo });
+    if (error) throw traducirError(error);
+  },
+  async invitar(datosInvitacion) {
+    const { data, error } = await sb.functions.invoke('invitar', { body: datosInvitacion });
+    if (error) {
+      let detalle = '';
+      try { detalle = (await error.context?.json?.())?.error || ''; } catch {}
+      if (!detalle && /Failed to send|fetch|404|not found/i.test(error.message)) detalle = 'La función "invitar" todavía no está instalada en Supabase.';
+      throw new Error(detalle || error.message);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data;
+  },
   async perfiles() {
-    const { data, error } = await sb.from('perfiles').select('id, email, nombre, ultimo_acceso').order('nombre');
+    const { data, error } = await sb.from('perfiles').select('*').order('nombre');
     if (error) throw traducirError(error);
     return data;
   },
@@ -442,7 +490,7 @@ function mostrarError(el, mensaje) {
 }
 
 // ---------- Estado ----------
-const estado = { insumos: [], movimientos: [], equipos: [], rollos: [], tiposCambio: [], perfiles: [], historial: [], conectados: [], usuario: null };
+const estado = { insumos: [], movimientos: [], equipos: [], rollos: [], tiposCambio: [], pendientes: [], perfiles: [], historial: [], conectados: [], usuario: null };
 
 const ESTILO_ESTADO = {
   ok:      { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', barra: 'bg-emerald-500', texto: 'OK' },
@@ -470,6 +518,7 @@ async function cargarDatos() {
     estado.tiposCambio = tiposCambio;
     estado.perfiles = perfiles;
     estado.historial = historial;
+    estado.pendientes = esAdmin() ? await datos.pendientes().catch(() => []) : [];
     estado.equipos = equipos;
     await fotos.firmar([...insumos, ...equipos].map((x) => x.foto_path && fotos.mini(x.foto_path))).catch(() => {});
     renderTodo();
@@ -510,6 +559,9 @@ window.addEventListener('hashchange', mostrarVista);
 
 // ---------- Render ----------
 function renderTodo() {
+  aplicarRol();
+  renderRevision();
+  if (modalRoles.open || esAdmin()) renderRoles();
   renderKpis();
   renderAlertas();
   renderFiltroCategorias();
@@ -690,10 +742,13 @@ function renderMovimientos() {
       <li class="px-4 py-2.5">
         <div class="flex items-baseline justify-between gap-2">
           <p class="min-w-0 truncate text-sm font-medium">${esc(m.insumo_nombre)}</p>
-          <p class="shrink-0 text-sm font-semibold text-red-700 tabular-nums">−${fmtNum.format(m.cantidad_retirada)} <span class="text-xs font-normal text-slate-500">${esc(m.unidad_medida)}</span></p>
+          <p class="shrink-0 text-sm font-semibold tabular-nums ${m.revision === 'anulado' ? 'text-slate-400 line-through' : 'text-red-700'}">−${fmtNum.format(m.cantidad_retirada)} <span class="text-xs font-normal text-slate-500">${esc(m.unidad_medida)}</span></p>
         </div>
         <p class="truncate text-xs text-slate-500">${esc(m.practica_motivo)} · retiró ${esc(m.responsable)}</p>
-        <p class="truncate text-[11px] text-slate-400">${fmtFecha(m.fecha_hora)}${m.usuario_id ? ` · cargó ${esc(nombreDe(m.usuario_id))}` : ''}</p>
+        <p class="flex items-center gap-2 text-[11px] text-slate-400"><span class="min-w-0 flex-1 truncate">${fmtFecha(m.fecha_hora)}${m.usuario_id ? ` · cargó ${esc(nombreDe(m.usuario_id))}` : ''}</span>
+          ${m.revision === 'pendiente' ? '<span class="shrink-0 rounded bg-violet-50 px-1.5 py-0.5 font-semibold text-violet-700 ring-1 ring-violet-200">Pendiente</span>' : ''}
+          ${m.revision === 'anulado' ? `<span class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-600" title="${esc(m.motivo_anulacion || '')}">Anulado</span>` : ''}
+          ${m.revision !== 'anulado' ? `<button type="button" data-solo-admin data-anular-consumo="${m.id}" class="shrink-0 font-medium text-red-700 hover:underline">Anular</button>` : ''}</p>
       </li>`,
         )
         .join('')
@@ -773,7 +828,7 @@ function renderTablaInsumos() {
         <td class="hidden px-4 py-3 text-right tabular-nums text-slate-600 lg:table-cell">${fmtNum.format(i.stock_minimo)}</td>
         <td class="text-right sm:px-4 sm:py-3">
           ${i.control_por_rollo ? `<button type="button" data-rollos="${i.id}" class="rounded-lg border border-marca-300 px-2.5 py-1 text-sm font-medium text-marca-700 hover:bg-marca-50">Rollos</button>` : ''}
-          <button type="button" data-editar="${i.id}" class="rounded-lg px-3 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
+          <button type="button" data-editar="${i.id}" data-solo-admin class="rounded-lg px-3 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
         </td>
       </tr>`;
     })
@@ -1132,6 +1187,7 @@ function conectarEventos() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'prestamos' }, programarRecarga)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rollos' }, programarRecarga)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'tipos_cambio' }, programarRecarga)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'perfiles' }, programarRecarga)
     .on('presence', { event: 'sync' }, () => {
       // Una entrada por usuario aunque tenga la app abierta en varios dispositivos.
       estado.conectados = Object.entries(canal.presenceState()).map(([id, sesiones]) => ({
@@ -1288,9 +1344,9 @@ function filaEquipo(e) {
     ? `<p class="text-xs text-slate-600"><span class="mr-1 rounded bg-marca-50 px-1.5 py-0.5 font-medium text-marca-800 ring-1 ring-marca-200">Conjunto</span>${plural(e.componentes || 0, 'componente', 'componentes')}${valorConjunto(e) != null ? ` · valor total ${fmtMoneda(valorConjunto(e))}` : ''}</p>
        ${bloqueado ? `<p class="mt-1 text-xs font-medium text-amber-800">No se puede prestar: ${esc(e.componentes_no_disponibles)}</p>` : ''}` : '';
   const accion = e.estado === 'Disponible' && !bloqueado
-    ? `<button type="button" data-prestar="${e.id}" class="rounded-lg bg-marca-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-marca-600">Prestar</button>`
+    ? `<button type="button" data-prestar="${e.id}" data-solo-operar class="rounded-lg bg-marca-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-marca-600">Prestar</button>`
     : e.estado === 'Prestado' && e.prestamo_id
-      ? `<button type="button" data-devolver="${e.id}" class="rounded-lg border border-marca-500 px-3 py-1.5 text-sm font-semibold text-marca-700 hover:bg-marca-50">Recibir</button>`
+      ? `<button type="button" data-devolver="${e.id}" data-solo-operar class="rounded-lg border border-marca-500 px-3 py-1.5 text-sm font-semibold text-marca-700 hover:bg-marca-50">Recibir</button>`
       : '';
   return `
     <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${e.estado === 'De baja' ? 'opacity-60' : ''}">
@@ -1306,7 +1362,7 @@ function filaEquipo(e) {
       <div class="flex shrink-0 items-center gap-2">
         <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${st.badge}">${esc(e.estado)}</span>
         ${accion}
-        <button type="button" data-editar-equipo="${e.id}" class="rounded-lg px-2.5 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
+        <button type="button" data-editar-equipo="${e.id}" data-solo-admin class="rounded-lg px-2.5 py-1.5 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
       </div>
     </li>`;
 }
@@ -1323,7 +1379,7 @@ function filaComponente(c) {
       </div>
       <div class="flex shrink-0 items-center gap-2">
         <span class="rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${st.badge}">${c.estado === 'Prestado' ? 'Prestado con el conjunto' : esc(c.estado)}</span>
-        <button type="button" data-editar-equipo="${c.id}" class="rounded-lg px-2.5 py-1 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
+        <button type="button" data-editar-equipo="${c.id}" data-solo-admin class="rounded-lg px-2.5 py-1 text-sm font-medium text-marca-700 hover:bg-marca-50">Editar</button>
       </div>
     </li>`;
 }
@@ -1453,6 +1509,7 @@ function abrirDevolucion(e) {
   formDevolucion.reset();
   mostrarError($('#dv-error'), '');
   formDevolucion.dataset.prestamo = e.prestamo_id;
+  formDevolucion.dataset.equipo = e.id;
   $('#dv-resumen').innerHTML = `${tarjetaEquipo(e)}
     <p class="mt-1.5 text-sm">Prestado a <strong>${esc(e.prestado_a)}</strong> el ${fechaCorta(e.prestamo_desde)}${e.prestamo_contacto ? ` · ${esc(e.prestamo_contacto)}` : ''}</p>
     ${e.prestamo_hasta ? `<p class="text-xs ${e.vencido ? 'font-semibold text-red-700' : 'text-slate-500'}">Debía volver el ${fmtDia(e.prestamo_hasta)}${e.vencido ? ' (vencido)' : ''}</p>` : ''}`;
@@ -1486,6 +1543,8 @@ function abrirEquipoPendiente() {
 function abrirEquipoPendienteDe(e) {
   $('#eq-texto').value = e.codigo_serie;
   renderEquipos();
+  if (!puedeOperar()) return toast(`${e.nombre}: ${e.estado}${e.prestado_a ? ' · prestado a ' + e.prestado_a : ''}.`);
+  if (!esAdmin() && !['Disponible', 'Prestado'].includes(e.estado)) return toast(`${e.nombre} está ${e.estado.toLowerCase()}.`);
   if (e.estado === 'Disponible' && e.es_conjunto && e.componentes_no_disponibles) {
     toast(`No se puede prestar ${e.nombre}: ${e.componentes_no_disponibles}.`);
     abrirEquipoForm(e);
@@ -1797,7 +1856,7 @@ function renderUsuarios() {
     ? lista.map((p) => {
         const enLinea = conectados.has(p.id);
         return `
-        <li class="flex items-center gap-3 px-4 py-2.5">
+        <li class="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5 ${p.activo === false ? 'opacity-60' : ''}">
           <span class="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-marca-100 text-xs font-bold text-marca-700">
             ${esc(iniciales(p.nombre || p.email))}
             <span class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white ${enLinea ? 'bg-emerald-500' : 'bg-slate-300'}"></span>
@@ -1806,7 +1865,10 @@ function renderUsuarios() {
             <span class="block truncate text-sm font-medium">${esc(p.nombre || 'Sin nombre')}${p.id === estado.usuario?.id ? ' <span class="text-xs font-normal text-slate-400">(vos)</span>' : ''}</span>
             <span class="block truncate text-xs text-slate-500">${esc(p.email)}</span>
           </span>
-          <span class="shrink-0 text-right text-xs ${enLinea ? 'font-medium text-emerald-700' : 'text-slate-400'}">${enLinea ? 'Conectado' : esc(haceCuanto(p.ultimo_acceso))}</span>
+          <span class="shrink-0 text-right text-xs ${enLinea ? 'font-medium text-emerald-700' : 'text-slate-400'}">
+            ${enLinea ? 'Conectado' : esc(haceCuanto(p.ultimo_acceso))}
+            <span class="mt-0.5 block">${p.activo === false ? '<span class="rounded bg-slate-200 px-1.5 py-0.5 font-semibold text-slate-600">Desactivado</span>' : `<span class="rounded px-1.5 py-0.5 font-semibold ${ROLES[p.rol]?.estilo || ''}">${esc(ROLES[p.rol]?.texto || p.rol || '')}</span>`}</span>
+          </span>
         </li>`;
       }).join('')
     : '<li class="px-4 py-6 text-center text-sm text-slate-500">Sin datos de usuarios.</li>';
@@ -1858,6 +1920,7 @@ function renderHistorial() {
     prestamo: ['bg-violet-50 text-violet-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-5-5l5 5-5 5"/>'],
     devolucion: ['bg-teal-50 text-teal-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M19 12H5m5-5l-5 5 5 5"/>'],
     entrada: ['bg-emerald-50 text-emerald-600', '<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/>'],
+    anulacion: ['bg-slate-100 text-slate-600', '<path stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/>'],
   };
 
   $('#lista-historial').innerHTML = lista.length
@@ -1880,6 +1943,11 @@ function renderHistorial() {
           const conDanio = /daño/i.test(h.detalle || '');
           titulo = `${etiquetaEquipo}Devolución de <strong>${esc(h.item)}</strong>${codigo} por ${esc(h.responsable)}`;
           detalle = `<span class="${conDanio ? 'font-semibold text-amber-700' : ''}">${esc(h.detalle || 'Bien')}</span>`;
+        } else if (h.tipo === 'anulacion') {
+          titulo = esEquipo
+            ? `${etiquetaEquipo}<strong>Anulado</strong> el préstamo de <strong>${esc(h.item)}</strong>${codigo} a ${esc(h.responsable)}`
+            : `<strong>Anulado</strong> el consumo de ${fmtNum.format(h.cantidad)} ${esc(h.unidad_medida)} · ${esc(h.item)}`;
+          detalle = [h.motivo && esc(h.motivo), h.detalle && esc(h.detalle)].filter(Boolean).join(' · ');
         } else if (h.tipo === 'alta') {
           titulo = `${etiquetaEquipo}Alta de <strong>${esc(h.item)}</strong>${codigo}`;
           const inicial = h.cambios?.stock_actual?.[1];
@@ -1923,8 +1991,9 @@ function abrirCuenta(motivo = '') {
   mostrarError($('#cuenta-error'), '');
   $('#cuenta-email').textContent = estado.usuario?.email || '';
   $('#cu-nombre').value = p?.nombre || '';
-  const pideClave = motivo === 'invite' || motivo === 'recovery';
+  const pideClave = ['invite', 'recovery', 'provisoria'].includes(motivo);
   const avisos = {
+    provisoria: 'Entraste con una contraseña provisoria: completá tu nombre y creá tu propia contraseña.',
     invite: '¡Bienvenido/a! Completá tu nombre y creá tu contraseña para entrar la próxima vez.',
     recovery: 'Creá tu contraseña nueva.',
     nombre: 'Completá tu nombre: así queda registrado quién carga cada cosa.',
@@ -1950,7 +2019,7 @@ formCuenta.addEventListener('submit', async (ev) => {
   const nombre = $('#cu-nombre').value.trim().replace(/\s+/g, ' ');
   const clave = $('#cu-clave').value;
   const clave2 = $('#cu-clave2').value;
-  const pideClave = cuentaObligatoria === 'invite' || cuentaObligatoria === 'recovery';
+  const pideClave = ['invite', 'recovery', 'provisoria'].includes(cuentaObligatoria);
 
   if (!nombre) return mostrarError(errorEl, 'Escribí tu nombre y apellido.');
   if (pideClave && !clave) return mostrarError(errorEl, 'Creá una contraseña.');
@@ -1961,7 +2030,7 @@ formCuenta.addEventListener('submit', async (ev) => {
   boton.disabled = true;
   try {
     if (clave) {
-      const { error } = await sb.auth.updateUser({ password: clave });
+      const { error } = await sb.auth.updateUser({ password: clave, data: { clave_provisoria: false } });
       if (error) {
         const m = /different from the old/i.test(error.message) ? 'La contraseña nueva tiene que ser distinta de la anterior.'
           : /weak|characters/i.test(error.message) ? 'La contraseña es muy débil: usá al menos 8 caracteres combinando letras y números.'
@@ -2616,6 +2685,7 @@ async function iniciarApp(sesion, motivo = '') {
   // Primer ingreso por invitación / recuperación: crear contraseña. Sin nombre: pedirlo.
   const enlace = motivo || tipoEnlace;
   if (enlace === 'invite' || enlace === 'recovery') abrirCuenta(enlace);
+  else if (sesion.user?.user_metadata?.clave_provisoria) abrirCuenta('provisoria');
   else if (perfil && !perfil.nombre) abrirCuenta('nombre');
 }
 
@@ -2762,3 +2832,239 @@ $$('[data-cambiar-tema]').forEach((b) => b.addEventListener('click', () => elegi
 $('#cu-tema').addEventListener('click', (ev) => { const b = ev.target.closest('[data-tema]'); if (b) elegirTema(b.dataset.tema); });
 mediaOscuro.addEventListener('change', () => { if (temaElegido() === 'auto') aplicarTema('auto'); });
 aplicarTema();
+
+
+// ---------- Roles: administrador, operador e invitado ----------
+const ROLES = {
+  admin:    { texto: 'Administrador', estilo: 'bg-marca-50 text-marca-800 ring-1 ring-marca-200' },
+  operador: { texto: 'Operador',      estilo: 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200' },
+  invitado: { texto: 'Invitado',      estilo: 'bg-slate-100 text-slate-700 ring-1 ring-slate-200' },
+};
+function miRol() {
+  const p = miPerfil();
+  if (!p) return '';
+  if (p.activo === false) return 'inactivo';
+  return p.rol || 'admin';   // sin la migración de roles (base vieja), todos pueden todo como antes
+}
+const esAdmin = () => miRol() === 'admin';
+const puedeOperar = () => ['admin', 'operador'].includes(miRol());
+
+function aplicarRol() {
+  const rol = miRol();
+  if (rol) document.documentElement.dataset.rol = rol;
+  else delete document.documentElement.dataset.rol;
+  const aviso = $('#aviso-rol');
+  const textos = {
+    invitado: 'Estás en <strong>modo consulta</strong> (rol Invitado): podés ver todo, pero no registrar ni modificar.',
+    inactivo: 'Tu usuario está <strong>desactivado</strong>. Pedile a un administrador del laboratorio que lo reactive.',
+    operador: estado.movimientos.some((m) => m.revision === 'pendiente' && m.usuario_id === estado.usuario?.id)
+      ? 'Tus consumos y préstamos quedan <strong>pendientes de revisión</strong> hasta que un administrador los aprueba. El stock se descuenta igual.' : '',
+  };
+  aviso.innerHTML = textos[rol] || '';
+  aviso.classList.toggle('hidden', !aviso.innerHTML);
+  aviso.classList.toggle('flex', !!aviso.innerHTML);
+  $('#avatar-iniciales').title = ROLES[rol]?.texto || '';
+}
+
+// Bandeja de pendientes (solo administradores)
+// Usuarios y roles (solo administradores)
+const modalRoles = $('#modal-roles');
+function renderRoles() {
+  const orden = { admin: 0, operador: 1, invitado: 2 };
+  const lista = [...estado.perfiles].sort((x, y) => (x.activo === false) - (y.activo === false) || (orden[x.rol] ?? 3) - (orden[y.rol] ?? 3)
+    || String(x.nombre || x.email).localeCompare(String(y.nombre || y.email)));
+  const cuenta = (r) => estado.perfiles.filter((p) => p.rol === r && p.activo !== false).length;
+  $('#roles-resumen').textContent = `${plural(cuenta('admin'), 'administrador', 'administradores')} · ${plural(cuenta('operador'), 'operador', 'operadores')} · ${plural(cuenta('invitado'), 'invitado', 'invitados')}`;
+  $('#cu-roles-pendientes').textContent = estado.pendientes.length ? `${estado.pendientes.length} pendientes de revisión` : '';
+  $('#lista-roles').innerHTML = lista.map((p) => {
+    const yo = p.id === estado.usuario?.id;
+    return `
+    <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 ${p.activo === false ? 'bg-slate-50' : ''}">
+      <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-marca-100 text-xs font-bold text-marca-700">${esc(iniciales(p.nombre || p.email))}</span>
+      <span class="min-w-0 flex-1 basis-40">
+        <span class="block truncate text-sm font-medium">${esc(p.nombre || 'Sin nombre')}${yo ? ' <span class="text-xs font-normal text-slate-400">(vos)</span>' : ''}${p.activo === false ? ' <span class="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600">Desactivado</span>' : ''}</span>
+        <span class="block truncate text-xs text-slate-500">${esc(p.email)} · ${esc(haceCuanto(p.ultimo_acceso))}</span>
+      </span>
+      ${yo
+        ? `<span class="rounded px-2 py-1 text-xs font-semibold ${ROLES[p.rol]?.estilo || ''}">${esc(ROLES[p.rol]?.texto || '')}</span>`
+        : `<select data-rol-usuario="${p.id}" aria-label="Rol de ${esc(p.nombre || p.email)}" class="rounded-lg border border-slate-300 px-2 py-1.5 text-sm" ${p.activo === false ? 'disabled' : ''}>
+            ${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${p.rol === k ? 'selected' : ''}>${v.texto}</option>`).join('')}
+          </select>
+          <button type="button" data-activar-usuario="${p.id}" data-activo="${p.activo === false ? 'no' : 'si'}" class="rounded-lg px-2.5 py-1.5 text-xs font-semibold ${p.activo === false ? 'text-emerald-700 hover:bg-emerald-50' : 'text-red-700 hover:bg-red-50'}">${p.activo === false ? 'Reactivar' : 'Desactivar'}</button>`}
+    </li>`;
+  }).join('');
+}
+document.addEventListener('click', (ev) => {
+  if (!ev.target.closest('[data-abrir-roles]')) return;
+  if (modalCuenta.open && !cuentaObligatoria) modalCuenta.close();
+  renderRoles();
+  modalRoles.showModal();
+});
+$$('[data-cerrar]', modalRoles).forEach((b) => b.addEventListener('click', () => modalRoles.close()));
+
+function renderRevision() {
+  const lista = estado.pendientes;
+  $('#panel-revision').classList.toggle('hidden', !esAdmin() || !lista.length);
+  $('#revision-cuenta').textContent = lista.length;
+  $('#lista-revision').innerHTML = lista.map((x) => `
+    <li class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
+      <div class="min-w-0 flex-1 basis-56">
+        <p class="truncate text-sm font-medium">${esc(x.titulo)}</p>
+        <p class="truncate text-xs text-slate-500">${esc(x.detalle)}</p>
+        <p class="truncate text-[11px] text-slate-400">${fmtFecha(x.fecha)} · cargó ${esc(nombreDe(x.usuario_id))}</p>
+      </div>
+      <button type="button" data-aprobar="${x.tipo}:${x.id}" class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">Aprobar</button>
+      <button type="button" data-anular="${x.tipo}:${x.id}" class="rounded-lg px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Anular</button>
+    </li>`).join('');
+}
+$('#lista-revision').addEventListener('click', async (ev) => {
+  const ap = ev.target.closest('[data-aprobar]');
+  const an = ev.target.closest('[data-anular]');
+  if (ap) {
+    const [tipo, id] = ap.dataset.aprobar.split(':');
+    ap.disabled = true;
+    try { await datos.aprobar(tipo, Number(id)); toast('Aprobado.'); await cargarDatos(); }
+    catch (err) { toast(err.message); ap.disabled = false; }
+  } else if (an) {
+    const [tipo, id] = an.dataset.anular.split(':');
+    const x = estado.pendientes.find((p) => p.tipo === tipo && p.id === Number(id));
+    pedirAnulacion(tipo, Number(id), x ? `${x.titulo} · ${x.detalle}` : '');
+  }
+});
+$('#btn-aprobar-todo').addEventListener('click', async (ev) => {
+  const b = ev.currentTarget;
+  b.disabled = true;
+  let ok = 0;
+  for (const x of [...estado.pendientes]) {
+    try { await datos.aprobar(x.tipo, x.id); ok++; } catch {}
+  }
+  toast(`${plural(ok, 'registro aprobado', 'registros aprobados')}.`);
+  b.disabled = false;
+  await cargarDatos();
+});
+
+// Anular (rechazar o borrar) un consumo o un préstamo
+const modalAnular = $('#modal-anular');
+function pedirAnulacion(tipo, id, detalle) {
+  $('#form-anular').reset();
+  $('#form-anular').dataset.tipo = tipo;
+  $('#form-anular').dataset.id = id;
+  mostrarError($('#an-error'), '');
+  $('#an-titulo').textContent = tipo === 'consumo' ? 'Anular consumo' : 'Anular préstamo';
+  $('#an-detalle').textContent = detalle;
+  $('#an-efecto').textContent = tipo === 'consumo'
+    ? 'Se devuelve la cantidad al stock (y el peso al rollo, si corresponde). No cuenta en reportes y queda registrado en el historial.'
+    : 'Si el equipo sigue prestado, vuelve a estar disponible. No cuenta en reportes y queda registrado en el historial.';
+  modalAnular.showModal();
+  $('#an-motivo').focus();
+}
+$$('[data-cerrar]', modalAnular).forEach((b) => b.addEventListener('click', () => modalAnular.close()));
+$('#form-anular').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const f = ev.currentTarget;
+  const motivo = $('#an-motivo').value.trim();
+  if (!motivo) return mostrarError($('#an-error'), 'Escribí el motivo.');
+  const b = $('button[type=submit]', f);
+  b.disabled = true;
+  try {
+    await datos.anular(f.dataset.tipo, Number(f.dataset.id), motivo);
+    modalAnular.close();
+    if (modalDevolucion.open) modalDevolucion.close();
+    toast(f.dataset.tipo === 'consumo' ? 'Consumo anulado: el stock se devolvió.' : 'Préstamo anulado.');
+    await cargarDatos();
+  } catch (err) {
+    mostrarError($('#an-error'), err.message);
+  } finally {
+    b.disabled = false;
+  }
+});
+$('#lista-movimientos').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-anular-consumo]');
+  if (!b) return;
+  const m = estado.movimientos.find((x) => x.id === Number(b.dataset.anularConsumo));
+  pedirAnulacion('consumo', m.id, `${m.insumo_nombre} · −${fmtNum.format(m.cantidad_retirada)} ${m.unidad_medida} · ${m.practica_motivo} · retiró ${m.responsable}`);
+});
+$('#btn-anular-prestamo').addEventListener('click', () => {
+  const e = buscarEquipo(formDevolucion.dataset.equipo);
+  pedirAnulacion('prestamo', Number(formDevolucion.dataset.prestamo), e ? `${e.nombre} · prestado a ${e.prestado_a}` : '');
+});
+
+// Usuarios: cambiar rol, desactivar e invitar (solo administradores)
+$('#lista-roles').addEventListener('change', async (ev) => {
+  const s = ev.target.closest('[data-rol-usuario]');
+  if (!s) return;
+  const p = estado.perfiles.find((x) => x.id === s.dataset.rolUsuario);
+  try {
+    await datos.cambiarRol(p.id, s.value);
+    toast(`${p.nombre || p.email} ahora es ${ROLES[s.value].texto}.`);
+    await cargarDatos();
+  } catch (err) {
+    toast(err.message);
+    s.value = p.rol;
+  }
+});
+$('#lista-roles').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-activar-usuario]');
+  if (!b) return;
+  const p = estado.perfiles.find((x) => x.id === b.dataset.activarUsuario);
+  const activar = b.dataset.activo === 'no';
+  b.disabled = true;
+  try {
+    await datos.activarUsuario(p.id, activar);
+    toast(`${p.nombre || p.email}: ${activar ? 'reactivado' : 'desactivado'}.`);
+    await cargarDatos();
+  } catch (err) {
+    toast(err.message);
+    b.disabled = false;
+  }
+});
+
+const modalInvitar = $('#modal-invitar');
+$('#btn-invitar').addEventListener('click', () => {
+  $('#form-invitar').reset();
+  $('#inv-campos').classList.remove('hidden');
+  $('#inv-resultado').classList.add('hidden');
+  $('#inv-enviar').textContent = 'Crear usuario';
+  $('#inv-enviar').dataset.listo = '';
+  mostrarError($('#inv-error'), '');
+  modalInvitar.showModal();
+  $('#inv-email').focus();
+});
+$$('[data-cerrar]', modalInvitar).forEach((b) => b.addEventListener('click', () => modalInvitar.close()));
+$('#form-invitar').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const b = $('#inv-enviar');
+  if (b.dataset.listo) return modalInvitar.close();
+  const email = $('#inv-email').value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return mostrarError($('#inv-error'), 'Escribí un correo válido.');
+  const modo = $('#form-invitar').elements.namedItem('inv-modo').value;
+  b.disabled = true;
+  mostrarError($('#inv-error'), '');
+  try {
+    const r = await datos.invitar({ email, nombre: $('#inv-nombre').value.trim(), rol: $('#inv-rol').value, modo,
+      redirectTo: location.origin + location.pathname });
+    $('#inv-campos').classList.add('hidden');
+    const res = $('#inv-resultado');
+    res.innerHTML = r.clave
+      ? `<p><strong>Listo.</strong> Pasale estos datos a la persona (la contraseña se muestra solo esta vez):</p>
+         <p>Dirección: <strong>${esc(location.origin + location.pathname)}</strong></p>
+         <p>Correo: <strong>${esc(r.email)}</strong></p>
+         <p class="flex items-center gap-2">Contraseña provisoria: <code class="rounded bg-superficie px-2 py-1 font-mono text-base font-semibold">${esc(r.clave)}</code>
+           <button type="button" data-copiar="${esc(r.clave)}" class="rounded-md border border-emerald-300 px-2 py-0.5 text-xs font-medium hover:bg-emerald-100">Copiar</button></p>
+         <p class="text-xs">Al entrar se le pide crear su propia contraseña.</p>`
+      : `<p><strong>Invitación enviada</strong> a ${esc(r.email)}. Le llega un correo con el enlace para crear su contraseña.</p>`;
+    res.classList.remove('hidden');
+    b.textContent = 'Cerrar';
+    b.dataset.listo = 'si';
+    await cargarDatos();
+  } catch (err) {
+    mostrarError($('#inv-error'), err.message);
+  } finally {
+    b.disabled = false;
+  }
+});
+$('#inv-resultado').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-copiar]');
+  if (!b) return;
+  try { await navigator.clipboard.writeText(b.dataset.copiar); b.textContent = 'Copiada'; } catch { b.textContent = 'Copiala a mano'; }
+});

@@ -181,6 +181,11 @@
   }
   input:disabled, select:disabled, textarea:disabled { background-color: rgb(var(--slate-100)); }
 }
+/* ---------- Permisos por rol (html[data-rol]) ---------- */
+html:not([data-rol="admin"]) [data-solo-admin] { display: none !important; }
+html:not([data-rol="admin"]):not([data-rol="operador"]) [data-solo-operar] { display: none !important; }
+html:not([data-rol="invitado"]):not([data-rol="inactivo"]) [data-solo-consulta] { display: none !important; }
+
 dialog { background-color: rgb(var(--superficie)); color: rgb(var(--slate-900)); }
 dialog::backdrop { background-color: rgb(2 6 23 / .55); }
 html { transition: background-color .2s; }

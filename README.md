@@ -24,6 +24,8 @@ Funciona desde PC y celular, en cualquier red, y se instala en el celular como a
 | `supabase/08-rollos.sql` | Supabase | Seguimiento por rollo (film, cintas): entradas, consumo por pesada (ejecutar después de `07`) |
 | `supabase/09-alarma-quiebre.sql` | Supabase | Alarma de quiebre: consumo promedio, demora del proveedor, punto de pedido (ejecutar después de `08`) |
 | `supabase/10-moneda.sql` | Supabase | Precios en pesos o dólares y tipo de cambio (ejecutar después de `09`) |
+| `supabase/11-roles.sql` | Supabase | Roles (administrador, operador, invitado), revisión y anulación (ejecutar después de `10`) |
+| `supabase/functions/invitar/` | Supabase | Función para invitar usuarios desde la app (Edge Function `invitar`) |
 
 La clave `anon` es pública por diseño. La seguridad la dan las reglas de la base:
 sin sesión iniciada no se puede leer ni modificar nada, y el registro público está desactivado.
@@ -48,6 +50,21 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
   - **Pedir pronto**: llega al punto de pedido en menos de una semana.
 - Se ve en el **Panel** (*Riesgo de quiebre de stock*), en la tabla de Insumos y en la hoja *Stock actual* del Excel.
 - Es independiente del *stock mínimo*, que sigue funcionando igual.
+
+## Roles de usuario
+
+| Rol | Qué puede hacer |
+|---|---|
+| **Administrador** | Todo: catálogo, precios, rollos, tipo de cambio, fotos; aprobar y anular registros; invitar, cambiar roles y desactivar usuarios. |
+| **Operador** | Registrar consumos, préstamos y devoluciones. Quedan **pendientes de revisión** (el stock se descuenta al instante igual). |
+| **Invitado** | Solo consulta. |
+
+- Los permisos los controla la base (políticas de seguridad en Supabase), no solo la pantalla.
+- **Pendientes de revisión** (Panel, solo administradores): *Aprobar* confirma; *Anular* revierte (vuelve el stock y el peso del rollo, o se libera el equipo). También se puede anular desde *Últimos consumos* o desde *Recibir devolución*.
+- Lo anulado no cuenta en reportes ni promedios y queda en el Historial con su motivo.
+- Un usuario **desactivado** no ve datos; su historial se conserva. Siempre queda al menos un administrador.
+- **Usuarios y roles** (Mi cuenta → *Usuarios y roles*, o Historial → *Gestionar roles*; solo administradores): cambiar el rol de cada persona, desactivarla o reactivarla.
+- **Invitar** (Usuarios y roles → *+ Invitar usuario*): con **contraseña provisoria** (se muestra una vez; al entrar la persona crea la suya) o por correo. Usa la función `invitar` de Supabase (*Edge Functions → Deploy a new function → Via Editor*, nombre `invitar`, pegar `supabase/functions/invitar/index.ts`).
 
 ## Modo oscuro
 
@@ -162,7 +179,7 @@ sin sesión iniciada no se puede leer ni modificar nada, y el registro público 
 - **Respaldo de datos:** pestaña **Reportes** → período *Este año* (o fechas a elección) → **Excel**.
   También: Supabase → Table Editor → tabla → *Export to CSV*.
 - **Volver a crear la base desde cero:** SQL Editor → pegar `supabase/schema.sql` → Run
-  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql`, `08-rollos.sql`, `09-alarma-quiebre.sql`, `10-moneda.sql` y `datos-iniciales.sql` para los datos de ejemplo).
+  (después `02-usuarios-y-auditoria.sql`, `03-equipos.sql`, `04-fotos.sql`, `05-reportes.sql`, `06-activos-fijos.sql`, `07-conjuntos.sql`, `08-rollos.sql`, `09-alarma-quiebre.sql`, `10-moneda.sql`, `11-roles.sql` y `datos-iniciales.sql` para los datos de ejemplo).
 
 ## Instalar en el celular
 
